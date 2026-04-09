@@ -74,6 +74,7 @@ const avatarUpload   = document.getElementById('avatar-upload');
 const avatarFile     = document.getElementById('avatar-file');
 const pfDisplayName  = document.getElementById('pf-display-name');
 const pfUsername     = document.getElementById('pf-username');
+const pfEmail        = document.getElementById('pf-email');
 const pfBio          = document.getElementById('pf-bio');
 const bioChars       = document.getElementById('bio-chars');
 const profileError   = document.getElementById('profile-error');
@@ -995,6 +996,7 @@ function initProfileView() {
   const u = currentUser;
   pfUsername.value     = u.username;
   pfDisplayName.value  = u.display_name || '';
+  pfEmail.value        = u.email || '';
   pfBio.value          = u.bio || '';
   profileError.textContent = '';
   updateBioCounter();
@@ -1040,11 +1042,13 @@ saveProfileBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
         display_name: pfDisplayName.value.trim(),
+        email:        pfEmail.value.trim(),
         bio:          pfBio.value.trim(),
       }),
     });
     currentUser = data.user;
     updateAuthUI(data.user);
+    verifyBanner.style.display = data.user.email_verified ? 'none' : 'block';
     showToast('Profile saved');
   } catch (e) {
     profileError.textContent = e.message;

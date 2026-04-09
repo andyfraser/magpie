@@ -126,14 +126,79 @@ function format_user(array $u): array {
     ];
 }
 
-function send_mail(string $to, string $subject, string $message): bool {
-    $headers = [
-        'From' => 'Magpie <noreply@magpie.local>',
-        'X-Mailer' => 'PHP/' . phpversion(),
-        'Content-Type' => 'text/plain; charset=utf-8'
-    ];
+function send_mail(string $to, string $subject, string $text, string $html): bool {
+    $boundary = '----=_Part_' . md5(uniqid());
+    $headers = implode("\r\n", [
+        'From: Magpie <noreply@magpie.local>',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/alternative; boundary="' . $boundary . '"',
+        'X-Mailer: PHP/' . phpversion(),
+    ]);
+    $body  = "--$boundary\r\n";
+    $body .= "Content-Type: text/plain; charset=utf-8\r\n\r\n$text\r\n\r\n";
+    $body .= "--$boundary\r\n";
+    $body .= "Content-Type: text/html; charset=utf-8\r\n\r\n$html\r\n\r\n";
+    $body .= "--$boundary--";
     // mail() will use sendmail_path from php.ini, which should be set to Mailpit
-    return mail($to, $subject, $message, $headers);
+    return mail($to, $subject, $body, $headers);
+}
+
+function mail_html_wrap(string $heading, string $body_html, string $cta_text, string $cta_url): string {
+    return <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Magpie</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:40px 0;">
+  <tr><td align="center">
+    <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);">
+      <!-- Header -->
+      <tr>
+        <td style="background:#ffffff;padding:28px 40px;text-align:center;border-bottom:1px solid #e5e7eb;">
+          <img src="http://$_SERVER[HTTP_HOST]/logo.png" alt="Magpie" width="40" height="40" style="vertical-align:middle;margin-right:10px;"><span style="font-size:22px;font-weight:700;color:#0f1419;letter-spacing:0.5px;vertical-align:middle;">Magpie</span>
+        </td>
+      </tr>
+      <!-- Body -->
+      <tr>
+        <td style="padding:40px 40px 32px;">
+          <h1 style="margin:0 0 16px;font-size:22px;color:#111827;line-height:1.3;">$heading</h1>
+          $body_html
+          <table cellpadding="0" cellspacing="0" style="margin:32px 0;">
+            <tr>
+              <td style="background:#1a1a2e;border-radius:6px;">
+                <a href="$cta_url"
+                   style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;
+                          color:#ffffff;text-decoration:none;letter-spacing:0.2px;">
+                  $cta_text
+                </a>
+              </td>
+            </tr>
+          </table>
+          <p style="margin:0;font-size:13px;color:#6b7280;">
+            Or copy and paste this link into your browser:<br>
+            <a href="$cta_url" style="color:#4f46e5;word-break:break-all;">$cta_url</a>
+          </p>
+        </td>
+      </tr>
+      <!-- Footer -->
+      <tr>
+        <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 40px;text-align:center;">
+          <p style="margin:0;font-size:12px;color:#9ca3af;">
+            You received this email because an action was taken on your Magpie account.<br>
+            If you did not request this, you can safely ignore this message.
+          </p>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>
+HTML;
 }
 
 // Columns and joins for a full post query.
@@ -313,7 +378,14 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
     $_SESSION['user_id'] = $uid;
 
     $url = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
-    send_mail($email, "Verify your Magpie account", "Hello $username,\n\nPlease verify your account by clicking the link below:\n\n$url");
+    $text = "Hello $username,\n\nThank you for joining Magpie! Please verify your email address by visiting the link below:\n\n$url\n\nIf you did not create an account, you can safely ignore this message.";
+    $html = mail_html_wrap(
+        "Confirm your email address",
+        "<p style='margin:0 0 12px;font-size:15px;color:#374151;line-height:1.6;'>Hi <strong>$username</strong>,</p><p style='margin:0;font-size:15px;color:#374151;line-height:1.6;'>Thank you for joining Magpie! Click the button below to verify your email address and activate your account.</p>",
+        "Verify Email Address",
+        $url
+    );
+    send_mail($email, "Verify your Magpie account", $text, $html);
 
     json_ok(['user' => format_user($db->querySingle("SELECT * FROM users WHERE id=$uid", true))]);
 }
@@ -365,7 +437,15 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'forgot-password') {
         $db->exec("UPDATE users SET reset_token='$token', reset_token_expires=$expires WHERE id=" . $u['id']);
         
         $url = "http://" . $_SERVER['HTTP_HOST'] . "/#reset=" . $token;
-        send_mail($email, "Reset your Magpie password", "Hello " . $u['username'] . ",\n\nYou requested a password reset. Click the link below to set a new password:\n\n$url\n\nThis link will expire in 1 hour.");
+        $uname = $u['username'];
+        $text = "Hello $uname,\n\nWe received a request to reset the password for your Magpie account. Click the link below to choose a new password:\n\n$url\n\nThis link expires in 1 hour. If you did not request a password reset, you can safely ignore this message.";
+        $html = mail_html_wrap(
+            "Reset your password",
+            "<p style='margin:0 0 12px;font-size:15px;color:#374151;line-height:1.6;'>Hi <strong>$uname</strong>,</p><p style='margin:0;font-size:15px;color:#374151;line-height:1.6;'>We received a request to reset the password for your Magpie account. Click the button below to choose a new password. This link will expire in <strong>1 hour</strong>.</p>",
+            "Reset Password",
+            $url
+        );
+        send_mail($email, "Reset your Magpie password", $text, $html);
     }
     // Always return OK for security
     json_ok(['ok' => true]);
@@ -400,7 +480,15 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'resend-verification
     }
 
     $url = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
-    send_mail($u['email'], "Verify your Magpie account", "Hello " . $u['username'] . ",\n\nPlease verify your account by clicking the link below:\n\n$url");
+    $uname = $u['username'];
+    $text = "Hello $uname,\n\nPlease verify your Magpie email address by visiting the link below:\n\n$url\n\nIf you did not request this, you can safely ignore this message.";
+    $html = mail_html_wrap(
+        "Confirm your email address",
+        "<p style='margin:0 0 12px;font-size:15px;color:#374151;line-height:1.6;'>Hi <strong>$uname</strong>,</p><p style='margin:0;font-size:15px;color:#374151;line-height:1.6;'>Click the button below to verify your email address and confirm your Magpie account.</p>",
+        "Verify Email Address",
+        $url
+    );
+    send_mail($u['email'], "Verify your Magpie account", $text, $html);
     
     json_ok(['ok' => true]);
 }
@@ -443,20 +531,45 @@ if ($method === 'POST' && $resource === 'users' && $sub1 === 'me' && $sub2 === '
     json_ok(['user' => format_user($db->querySingle("SELECT * FROM users WHERE id=$uid", true))]);
 }
 
-// PUT /users/me — update display_name and bio
+// PUT /users/me — update display_name, email, and bio
 if ($method === 'PUT' && $resource === 'users' && $sub1 === 'me') {
     $uid   = require_auth();
     $input = json_decode(file_get_contents('php://input'), true);
 
-    $dn  = trim($input['display_name'] ?? '');
-    $bio = trim($input['bio'] ?? '');
+    $dn    = trim($input['display_name'] ?? '');
+    $bio   = trim($input['bio'] ?? '');
+    $email = trim($input['email'] ?? '');
 
     if (mb_strlen($dn)  > 50)  json_error('Display name too long (max 50 characters)');
     if (mb_strlen($bio) > 160) json_error('Bio too long (max 160 characters)');
+    if (!$email)                json_error('Email address is required');
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('Invalid email address');
 
-    $dn_sql  = $dn  ? "'" . SQLite3::escapeString($dn)  . "'" : 'NULL';
-    $bio_sql = $bio ? "'" . SQLite3::escapeString($bio) . "'" : 'NULL';
-    $db->exec("UPDATE users SET display_name=$dn_sql, bio=$bio_sql WHERE id=$uid");
+    $dn_sql    = $dn  ? "'" . SQLite3::escapeString($dn)  . "'" : 'NULL';
+    $bio_sql   = $bio ? "'" . SQLite3::escapeString($bio) . "'" : 'NULL';
+    $esc_email = SQLite3::escapeString($email);
+
+    $current = $db->querySingle("SELECT email FROM users WHERE id=$uid", true);
+    $email_changed = strtolower($email) !== strtolower($current['email']);
+    if ($email_changed) {
+        if ($db->querySingle("SELECT id FROM users WHERE email='$esc_email' AND id != $uid"))
+            json_error('Email address is already in use');
+        $v_token = bin2hex(random_bytes(32));
+        $esc_tok = SQLite3::escapeString($v_token);
+        $db->exec("UPDATE users SET display_name=$dn_sql, bio=$bio_sql, email='$esc_email', email_verified=0, verification_token='$esc_tok' WHERE id=$uid");
+        $uname = $db->querySingle("SELECT username FROM users WHERE id=$uid");
+        $url   = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
+        $text  = "Hello $uname,\n\nPlease verify your new Magpie email address by visiting the link below:\n\n$url\n\nIf you did not request this change, please contact support.";
+        $html  = mail_html_wrap(
+            "Confirm your new email address",
+            "<p style='margin:0 0 12px;font-size:15px;color:#374151;line-height:1.6;'>Hi <strong>$uname</strong>,</p><p style='margin:0;font-size:15px;color:#374151;line-height:1.6;'>Your Magpie email address was changed. Click the button below to verify your new address.</p>",
+            "Verify Email Address",
+            $url
+        );
+        send_mail($email, "Verify your new Magpie email address", $text, $html);
+    } else {
+        $db->exec("UPDATE users SET display_name=$dn_sql, bio=$bio_sql WHERE id=$uid");
+    }
 
     json_ok(['user' => format_user($db->querySingle("SELECT * FROM users WHERE id=$uid", true))]);
 }

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Magpie</title>
+  <link rel="icon" type="image/png" href="/logo.png">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -342,6 +343,12 @@
           <label>Username</label>
           <input id="pf-username" type="text" disabled class="input-disabled">
           <div class="field-hint">Usernames cannot be changed.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="pf-email">Email address</label>
+          <input id="pf-email" type="email" maxlength="254" placeholder="you@example.com">
+          <div class="field-hint">Changing your email will require re-verification.</div>
         </div>
 
         <div class="form-group">
