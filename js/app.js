@@ -99,6 +99,7 @@ let currentPage  = 1;
 let totalPages   = 1;
 let isSubmitting = false;
 let currentFeed  = 'for-you';
+let feedRefreshTimer = null;
 
 // Compose modal state
 let composeMode     = null; // 'reply' | 'quote'
@@ -412,6 +413,15 @@ async function submitPost() {
 }
 
 // ── Feed ──────────────────────────────────────────────────
+function scheduleFeedRefresh() {
+  clearTimeout(feedRefreshTimer);
+  feedRefreshTimer = setTimeout(() => {
+    if (currentUser && document.getElementById('view-home').style.display !== 'none') {
+      loadPosts(1, true);
+    }
+  }, 2 * 60 * 1000);
+}
+
 async function loadPosts(page, replace) {
   loadMoreBtn.disabled = true;
   try {
@@ -431,6 +441,7 @@ async function loadPosts(page, replace) {
       data.posts.forEach(p => feed.appendChild(renderPost(p)));
     }
     loadMoreWrap.hidden = currentPage >= totalPages;
+    scheduleFeedRefresh();
   } catch (e) {
     showToast(e.message, true);
   } finally {
