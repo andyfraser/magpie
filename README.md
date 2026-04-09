@@ -60,6 +60,7 @@ The first person to register is automatically granted administrator privileges.
 - `api.php` — Entire backend: SQLite init, schema migration, and all API endpoints
 - `js/app.js` — Entire frontend: state management, routing, API calls, DOM rendering
 - `css/style.css` — All application styles
+- `logo.png` — App logo (used as favicon)
 - `uploads/avatars/` — User avatar storage (created automatically)
 - `magpie.db` — SQLite database (auto-generated on first request)
 
