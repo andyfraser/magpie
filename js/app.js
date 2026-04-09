@@ -12,12 +12,29 @@ const loginPasswordI = document.getElementById('login-password');
 const loginError     = document.getElementById('login-error');
 const loginBtn       = document.getElementById('login-btn');
 const signupUsername = document.getElementById('signup-username');
+const signupEmail    = document.getElementById('signup-email');
 const signupPassword = document.getElementById('signup-password');
 const signupConfirm  = document.getElementById('signup-confirm');
 const signupError    = document.getElementById('signup-error');
 const signupBtn      = document.getElementById('signup-btn');
 const toSignup       = document.getElementById('to-signup');
 const toLogin        = document.getElementById('to-login');
+
+const forgotView     = document.getElementById('forgot-view');
+const forgotEmail    = document.getElementById('forgot-email');
+const forgotError    = document.getElementById('forgot-error');
+const forgotBtn      = document.getElementById('forgot-btn');
+const toForgot       = document.getElementById('to-forgot');
+const forgotToLogin  = document.getElementById('forgot-to-login');
+
+const resetView      = document.getElementById('reset-view');
+const resetPassword  = document.getElementById('reset-password');
+const resetConfirm   = document.getElementById('reset-confirm');
+const resetError     = document.getElementById('reset-error');
+const resetBtn       = document.getElementById('reset-btn');
+
+const verifyBanner   = document.getElementById('verify-banner');
+const resendVerifyBtn = document.getElementById('resend-verify-btn');
 
 const composeEl      = document.getElementById('compose');
 const postInput      = document.getElementById('post-input');
@@ -108,12 +125,39 @@ let composeIsSubmitting = false;
 
 // ── Boot ──────────────────────────────────────────────────
 (async () => {
+  // Handle verify/reset tokens in URL hash
+  const hash = window.location.hash.substring(1);
+  const params = new URLSearchParams(hash);
+  const verifyToken = params.get('verify');
+  const resetToken  = params.get('reset');
+
+  if (verifyToken) {
+    try {
+      await apiFetch('auth/verify-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: verifyToken }),
+      });
+      showToast('Email verified! You can now post.');
+      window.location.hash = '';
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  } else if (resetToken) {
+    showAuthModal('reset');
+    window.location.hash = '';
+    resetBtn.dataset.token = resetToken;
+  }
+
   try {
     const data = await apiFetch('auth/me');
-    if (data.user) onLogin(data.user);
-    else           showAuthModal('login');
+    if (data.user) {
+      onLogin(data.user);
+    } else if (!resetToken) {
+      showAuthModal('login');
+    }
   } catch {
-    showAuthModal('login');
+    if (!resetToken) showAuthModal('login');
   }
   loadPosts(1, true);
 })();
@@ -243,23 +287,28 @@ document.querySelectorAll('.nav-link').forEach(link => {
 // ── Auth modal ────────────────────────────────────────────
 function showAuthModal(view) {
   authModal.classList.remove('hidden');
-  if (view === 'signup') {
-    loginView.style.display  = 'none';
-    signupView.style.display = '';
-    signupUsername.focus();
-  } else {
-    loginView.style.display  = '';
-    signupView.style.display = 'none';
-    loginUsernameI.focus();
-  }
+  loginView.style.display  = view === 'login'  ? '' : 'none';
+  signupView.style.display = view === 'signup' ? '' : 'none';
+  forgotView.style.display = view === 'forgot' ? '' : 'none';
+  resetView.style.display  = view === 'reset'  ? '' : 'none';
+
+  if (view === 'signup') signupUsername.focus();
+  if (view === 'login')  loginUsernameI.focus();
+  if (view === 'forgot') forgotEmail.focus();
+  if (view === 'reset')  resetPassword.focus();
 }
 
 function hideAuthModal() { authModal.classList.add('hidden'); }
 
 toSignup.addEventListener('click', () => showAuthModal('signup'));
 toLogin.addEventListener('click',  () => showAuthModal('login'));
+toForgot.addEventListener('click', () => showAuthModal('forgot'));
+forgotToLogin.addEventListener('click', () => showAuthModal('login'));
+
 loginPasswordI.addEventListener('keydown', e => { if (e.key === 'Enter') loginBtn.click(); });
 signupConfirm.addEventListener('keydown',  e => { if (e.key === 'Enter') signupBtn.click(); });
+forgotEmail.addEventListener('keydown',    e => { if (e.key === 'Enter') forgotBtn.click(); });
+resetConfirm.addEventListener('keydown',   e => { if (e.key === 'Enter') resetBtn.click(); });
 
 loginBtn.addEventListener('click', async () => {
   loginError.textContent = '';
@@ -285,16 +334,17 @@ loginBtn.addEventListener('click', async () => {
 signupBtn.addEventListener('click', async () => {
   signupError.textContent = '';
   const username = signupUsername.value.trim();
+  const email    = signupEmail.value.trim();
   const password = signupPassword.value;
   const confirm  = signupConfirm.value;
-  if (!username || !password) { signupError.textContent = 'Fill in all fields'; return; }
-  if (password !== confirm)   { signupError.textContent = 'Passwords do not match'; return; }
+  if (!username || !email || !password) { signupError.textContent = 'Fill in all fields'; return; }
+  if (password !== confirm)              { signupError.textContent = 'Passwords do not match'; return; }
   signupBtn.disabled = true;
   try {
     const data = await apiFetch('auth/signup', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ username, password }),
+      body:    JSON.stringify({ username, email, password }),
     });
     onLogin(data.user);
     loadPosts(1, true);
@@ -302,6 +352,49 @@ signupBtn.addEventListener('click', async () => {
     signupError.textContent = e.message;
   } finally {
     signupBtn.disabled = false;
+  }
+});
+
+forgotBtn.addEventListener('click', async () => {
+  forgotError.textContent = '';
+  const email = forgotEmail.value.trim();
+  if (!email) { forgotError.textContent = 'Email is required'; return; }
+  forgotBtn.disabled = true;
+  try {
+    await apiFetch('auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    showToast('If an account exists, a reset link has been sent!');
+    showAuthModal('login');
+  } catch (e) {
+    forgotError.textContent = e.message;
+  } finally {
+    forgotBtn.disabled = false;
+  }
+});
+
+resetBtn.addEventListener('click', async () => {
+  resetError.textContent = '';
+  const password = resetPassword.value;
+  const confirm  = resetConfirm.value;
+  const token    = resetBtn.dataset.token;
+  if (password.length < 6) { resetError.textContent = 'Password must be at least 6 characters'; return; }
+  if (password !== confirm) { resetError.textContent = 'Passwords do not match'; return; }
+  resetBtn.disabled = true;
+  try {
+    await apiFetch('auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password }),
+    });
+    showToast('Password reset successful! You can now log in.');
+    showAuthModal('login');
+  } catch (e) {
+    resetError.textContent = e.message;
+  } finally {
+    resetBtn.disabled = false;
   }
 });
 
@@ -319,8 +412,11 @@ logoutBtn.addEventListener('click', async () => {
   navAdmin.style.display         = 'none';
   navNotifications.style.display = 'none';
   notifBadge.classList.add('hidden');
+  verifyBanner.style.display = 'none';
   loginUsernameI.value = loginPasswordI.value = '';
+  signupUsername.value = signupEmail.value = signupPassword.value = signupConfirm.value = '';
   loginError.textContent = '';
+
   showAuthModal('login');
   showView('home');
   loadPosts(1, true);
@@ -339,9 +435,22 @@ function onLogin(user) {
   navFollowing.style.display     = '';
   navNotifications.style.display = '';
   navAdmin.style.display         = user.is_admin ? '' : 'none';
+  verifyBanner.style.display     = user.email_verified ? 'none' : 'block';
   postInput.focus();
   refreshNotifCount();
 }
+
+resendVerifyBtn.addEventListener('click', async () => {
+  resendVerifyBtn.disabled = true;
+  try {
+    await apiFetch('auth/resend-verification', { method: 'POST' });
+    showToast('Verification email sent!');
+  } catch (e) {
+    showToast(e.message, true);
+  } finally {
+    setTimeout(() => { resendVerifyBtn.disabled = false; }, 5000);
+  }
+});
 
 function updateAuthUI(user) {
   sidebarDN.textContent     = user.display_name || user.username;

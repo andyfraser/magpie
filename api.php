@@ -8,7 +8,7 @@ const DB_PATH         = __DIR__ . '/magpie.db';
 const UPLOADS_DIR     = __DIR__ . '/uploads/avatars/';
 const UPLOADS_URL     = '/uploads/avatars/';
 const MAX_POST_LENGTH = 500;
-const SCHEMA_VERSION  = 5;
+const SCHEMA_VERSION  = 6;
 
 // ── Database ──────────────────────────────────────────────
 
@@ -35,6 +35,11 @@ function get_db(): SQLite3 {
         CREATE TABLE IF NOT EXISTS users (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             username     TEXT    NOT NULL UNIQUE,
+            email        TEXT    NOT NULL UNIQUE,
+            email_verified INTEGER NOT NULL DEFAULT 0,
+            verification_token TEXT,
+            reset_token  TEXT,
+            reset_token_expires INTEGER,
             display_name TEXT,
             bio          TEXT,
             avatar       TEXT,
@@ -110,6 +115,8 @@ function format_user(array $u): array {
     return [
         'id'           => (int)$u['id'],
         'username'     => $u['username'],
+        'email'        => $u['email'] ?? null,
+        'email_verified' => (bool)($u['email_verified'] ?? false),
         'display_name' => $u['display_name'] ?: null,
         'bio'          => $u['bio'] ?: null,
         'avatar'       => $u['avatar'] ? UPLOADS_URL . $u['avatar'] : null,
@@ -117,6 +124,16 @@ function format_user(array $u): array {
         'disabled'     => (bool)$u['disabled'],
         'created_at'   => (int)$u['created_at'],
     ];
+}
+
+function send_mail(string $to, string $subject, string $message): bool {
+    $headers = [
+        'From' => 'Magpie <noreply@magpie.local>',
+        'X-Mailer' => 'PHP/' . phpversion(),
+        'Content-Type' => 'text/plain; charset=utf-8'
+    ];
+    // mail() will use sendmail_path from php.ini, which should be set to Mailpit
+    return mail($to, $subject, $message, $headers);
 }
 
 // Columns and joins for a full post query.
@@ -261,29 +278,43 @@ if ($method === 'GET' && $resource === 'auth' && $sub1 === 'me') {
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
     $input    = json_decode(file_get_contents('php://input'), true);
     $username = trim($input['username'] ?? '');
+    $email    = trim($input['email'] ?? '');
     $password = $input['password'] ?? '';
 
     if (!preg_match('/^\w{1,30}$/', $username))
         json_error('Username must be 1–30 characters: letters, numbers, underscores only');
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL))
+        json_error('Invalid email address');
     if (strlen($password) < 6)
         json_error('Password must be at least 6 characters');
 
-    $esc = SQLite3::escapeString($username);
-    if ($db->querySingle("SELECT id FROM users WHERE username='$esc'"))
+    $esc_u = SQLite3::escapeString($username);
+    if ($db->querySingle("SELECT id FROM users WHERE username='$esc_u'"))
         json_error('Username already taken');
+
+    $esc_e = SQLite3::escapeString($email);
+    if ($db->querySingle("SELECT id FROM users WHERE email='$esc_e'"))
+        json_error('Email already registered');
 
     $hash     = password_hash($password, PASSWORD_BCRYPT);
     $is_admin = ($db->querySingle('SELECT COUNT(*) FROM users') === 0) ? 1 : 0;
+    $v_token  = bin2hex(random_bytes(32));
 
-    $stmt = $db->prepare('INSERT INTO users (username, password, is_admin, created_at) VALUES (:u,:p,:a,:t)');
+    $stmt = $db->prepare('INSERT INTO users (username, email, password, is_admin, verification_token, created_at) VALUES (:u,:e,:p,:a,:v,:t)');
     $stmt->bindValue(':u', $username, SQLITE3_TEXT);
+    $stmt->bindValue(':e', $email,    SQLITE3_TEXT);
     $stmt->bindValue(':p', $hash,     SQLITE3_TEXT);
     $stmt->bindValue(':a', $is_admin, SQLITE3_INTEGER);
+    $stmt->bindValue(':v', $v_token,  SQLITE3_TEXT);
     $stmt->bindValue(':t', time(),    SQLITE3_INTEGER);
     $stmt->execute();
 
     $uid = $db->lastInsertRowID();
     $_SESSION['user_id'] = $uid;
+
+    $url = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
+    send_mail($email, "Verify your Magpie account", "Hello $username,\n\nPlease verify your account by clicking the link below:\n\n$url");
+
     json_ok(['user' => format_user($db->querySingle("SELECT * FROM users WHERE id=$uid", true))]);
 }
 
@@ -293,7 +324,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
     $password = $input['password'] ?? '';
 
     $esc  = SQLite3::escapeString($username);
-    $u    = $db->querySingle("SELECT * FROM users WHERE username='$esc'", true);
+    $u    = $db->querySingle("SELECT * FROM users WHERE username='$esc' OR email='$esc'", true);
     if (!$u || !password_verify($password, $u['password']))
         json_error('Invalid username or password', 401);
     if ($u['disabled'])
@@ -305,6 +336,72 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'logout') {
     session_destroy();
+    json_ok(['ok' => true]);
+}
+
+if ($method === 'POST' && $resource === 'auth' && $sub1 === 'verify-email') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    $token = trim($input['token'] ?? '');
+    if (!$token) json_error('Token required');
+
+    $esc = SQLite3::escapeString($token);
+    $u = $db->querySingle("SELECT id FROM users WHERE verification_token='$esc'", true);
+    if (!$u) json_error('Invalid or expired token');
+
+    $db->exec("UPDATE users SET email_verified=1, verification_token=NULL WHERE id=" . $u['id']);
+    json_ok(['ok' => true]);
+}
+
+if ($method === 'POST' && $resource === 'auth' && $sub1 === 'forgot-password') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    $email = trim($input['email'] ?? '');
+    if (!$email) json_error('Email required');
+
+    $esc = SQLite3::escapeString($email);
+    $u = $db->querySingle("SELECT id, username FROM users WHERE email='$esc'", true);
+    if ($u) {
+        $token = bin2hex(random_bytes(32));
+        $expires = time() + 3600; // 1 hour
+        $db->exec("UPDATE users SET reset_token='$token', reset_token_expires=$expires WHERE id=" . $u['id']);
+        
+        $url = "http://" . $_SERVER['HTTP_HOST'] . "/#reset=" . $token;
+        send_mail($email, "Reset your Magpie password", "Hello " . $u['username'] . ",\n\nYou requested a password reset. Click the link below to set a new password:\n\n$url\n\nThis link will expire in 1 hour.");
+    }
+    // Always return OK for security
+    json_ok(['ok' => true]);
+}
+
+if ($method === 'POST' && $resource === 'auth' && $sub1 === 'reset-password') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    $token = trim($input['token'] ?? '');
+    $password = $input['password'] ?? '';
+
+    if (!$token) json_error('Token required');
+    if (strlen($password) < 6) json_error('Password must be at least 6 characters');
+
+    $esc = SQLite3::escapeString($token);
+    $u = $db->querySingle("SELECT id FROM users WHERE reset_token='$esc' AND reset_token_expires > " . time(), true);
+    if (!$u) json_error('Invalid or expired token');
+
+    $hash = password_hash($password, PASSWORD_BCRYPT);
+    $db->exec("UPDATE users SET password='$hash', reset_token=NULL, reset_token_expires=NULL WHERE id=" . $u['id']);
+    json_ok(['ok' => true]);
+}
+
+if ($method === 'POST' && $resource === 'auth' && $sub1 === 'resend-verification') {
+    $uid = require_auth();
+    $u = $db->querySingle("SELECT * FROM users WHERE id=$uid", true);
+    if ($u['email_verified']) json_error('Email already verified');
+    
+    $v_token = $u['verification_token'];
+    if (!$v_token) {
+        $v_token = bin2hex(random_bytes(32));
+        $db->exec("UPDATE users SET verification_token='$v_token' WHERE id=$uid");
+    }
+
+    $url = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
+    send_mail($u['email'], "Verify your Magpie account", "Hello " . $u['username'] . ",\n\nPlease verify your account by clicking the link below:\n\n$url");
+    
     json_ok(['ok' => true]);
 }
 
@@ -490,8 +587,9 @@ if ($method === 'GET' && $resource === 'posts') {
 
 if ($method === 'POST' && $resource === 'posts' && !$id) {
     $uid = require_auth();
-    $u   = $db->querySingle("SELECT username, disabled FROM users WHERE id=$uid", true);
+    $u   = $db->querySingle("SELECT username, disabled, email_verified FROM users WHERE id=$uid", true);
     if ($u['disabled']) json_error('Your account has been disabled', 403);
+    if (!$u['email_verified']) json_error('Please verify your email address to post', 403);
 
     $input     = json_decode(file_get_contents('php://input'), true);
     $body      = trim($input['body'] ?? '');

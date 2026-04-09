@@ -27,7 +27,7 @@
     <div id="login-view">
       <h2>Sign in to Magpie</h2>
       <div class="form-group">
-        <label for="login-username">Username</label>
+        <label for="login-username">Username or Email</label>
         <input id="login-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false">
       </div>
       <div class="form-group">
@@ -36,6 +36,7 @@
       </div>
       <div class="form-error" id="login-error"></div>
       <button class="btn btn-primary" id="login-btn">Sign in</button>
+      <p class="modal-switch"><a id="to-forgot">Forgot password?</a></p>
       <p class="modal-switch">Don't have an account? <a id="to-signup">Sign up</a></p>
     </div>
     <!-- Signup -->
@@ -45,6 +46,10 @@
         <label for="signup-username">Username</label>
         <input id="signup-username" type="text" autocomplete="username" autocapitalize="none"
                spellcheck="false" placeholder="letters, numbers, underscores">
+      </div>
+      <div class="form-group">
+        <label for="signup-email">Email</label>
+        <input id="signup-email" type="email" autocomplete="email" placeholder="you@example.com">
       </div>
       <div class="form-group">
         <label for="signup-password">Password</label>
@@ -57,6 +62,32 @@
       <div class="form-error" id="signup-error"></div>
       <button class="btn btn-primary" id="signup-btn">Create account</button>
       <p class="modal-switch">Already have an account? <a id="to-login">Sign in</a></p>
+    </div>
+    <!-- Forgot Password -->
+    <div id="forgot-view" style="display:none">
+      <h2>Find your Magpie account</h2>
+      <p style="margin-bottom:16px; font-size:14px; color:var(--text-sub);">Enter the email associated with your account to change your password.</p>
+      <div class="form-group">
+        <label for="forgot-email">Email</label>
+        <input id="forgot-email" type="email" autocomplete="email">
+      </div>
+      <div class="form-error" id="forgot-error"></div>
+      <button class="btn btn-primary" id="forgot-btn">Send reset link</button>
+      <p class="modal-switch"><a id="forgot-to-login">Back to login</a></p>
+    </div>
+    <!-- Reset Password -->
+    <div id="reset-view" style="display:none">
+      <h2>Reset your password</h2>
+      <div class="form-group">
+        <label for="reset-password">New password</label>
+        <input id="reset-password" type="password" autocomplete="new-password" placeholder="at least 6 characters">
+      </div>
+      <div class="form-group">
+        <label for="reset-confirm">Confirm new password</label>
+        <input id="reset-confirm" type="password" autocomplete="new-password">
+      </div>
+      <div class="form-error" id="reset-error"></div>
+      <button class="btn btn-primary" id="reset-btn">Reset password</button>
     </div>
   </div>
 </div>
@@ -197,6 +228,15 @@
   </nav>
 
   <main class="main">
+
+    <!-- ── Verification Banner ────────────────────────── -->
+    <div id="verify-banner" class="verify-banner" style="display:none">
+      <div class="verify-banner-content">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        <span>Please verify your email address.</span>
+        <button id="resend-verify-btn" class="btn-resend">Resend email</button>
+      </div>
+    </div>
 
     <!-- ── Home view ──────────────────────────────────── -->
     <div id="view-home" class="view">
