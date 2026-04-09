@@ -94,6 +94,45 @@
   </div>
 </div>
 
+<!-- ── Reply / Quote compose modal ──────────────────────── -->
+<div class="modal-overlay hidden" id="compose-modal">
+  <div class="modal compose-modal">
+    <div id="compose-modal-context"></div>
+    <div class="compose-inner" style="padding-top:12px">
+      <div class="avatar" id="compose-modal-avatar">?</div>
+      <div class="compose-body">
+        <div id="compose-modal-label" class="reply-label" style="display:none"></div>
+        <textarea id="compose-modal-input" placeholder="Post your reply" rows="3"></textarea>
+        <div id="compose-modal-quote-wrap" style="display:none"></div>
+        <div class="compose-footer">
+          <div class="char-ring-wrap">
+            <svg class="char-ring" id="compose-modal-ring" viewBox="0 0 22 22">
+              <circle class="track" cx="11" cy="11" r="9"/>
+              <circle class="fill"  cx="11" cy="11" r="9" stroke-dashoffset="0" id="compose-modal-ring-fill"/>
+            </svg>
+            <span class="char-remaining" id="compose-modal-remaining"></span>
+          </div>
+          <button class="btn btn-ghost" id="compose-modal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="compose-modal-submit" disabled>Post</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Thread modal ──────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="thread-modal">
+  <div class="thread-panel">
+    <div class="thread-panel-header">
+      <button class="thread-back-btn" id="thread-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+      </button>
+      <span class="thread-panel-title">Thread</span>
+    </div>
+    <div class="thread-panel-body" id="thread-content"></div>
+  </div>
+</div>
+
 <!-- ── App ──────────────────────────────────────────────── -->
 <div class="layout">
 
@@ -115,6 +154,14 @@
     <a class="nav-link active" data-view="home" href="#">
       <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="2" fill="none"/><polyline points="9 22 9 12 15 12 15 22" stroke="currentColor" stroke-width="2" fill="none"/></svg>
       <span>Home</span>
+    </a>
+
+    <a class="nav-link" data-view="notifications" href="#" id="nav-notifications" style="display:none">
+      <div class="nav-icon-wrap">
+        <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M13.73 21a2 2 0 0 1-3.46 0" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <span class="notif-badge hidden" id="notif-badge"></span>
+      </div>
+      <span>Notifications</span>
     </a>
 
     <a class="nav-link" data-view="liked" href="#" id="nav-liked" style="display:none">
@@ -184,6 +231,14 @@
       <div id="load-more-wrap" hidden>
         <button class="btn btn-ghost" id="load-more-btn">Load more</button>
       </div>
+    </div>
+
+    <!-- ── Notifications view ─────────────────────────── -->
+    <div id="view-notifications" class="view" style="display:none">
+      <div class="view-header">
+        <div class="view-title">Notifications</div>
+      </div>
+      <div id="notifications-list"></div>
     </div>
 
     <!-- ── Liked view ───────────────────────────────────── -->

@@ -4,28 +4,32 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 
 ## Features
 
-- **Standardized UI:** Clean, minimalist design with a consistent layout across all views.
-- **Micro-blogging:** Share your thoughts in short posts with character limits.
-- **Interactions:** Like posts, follow users, and see their posts in your following feed.
-- **User Discovery:** A dedicated section to search for users and manage who you follow.
-- **Custom Profiles:** Personalize your account with display names, bios, and profile pictures.
-- **Admin Panel:** Powerful tools for user management and content control.
-- **Responsive:** Designed to work smoothly on mobile and desktop devices.
+- **Micro-blogging:** Share thoughts in posts up to 500 characters.
+- **Replies & Threads:** Reply to any post; thread view shows the full ancestor chain and replies.
+- **Quote Posts:** Quote-repost with added commentary.
+- **Likes:** Like and unlike posts; view all your liked posts in a dedicated feed.
+- **Follow System:** Follow users; filter your home feed to show only people you follow.
+- **Notifications:** Get notified when someone replies to, quotes, or follows you; unread badge in the sidebar.
+- **User Discovery:** Search users by username or display name.
+- **Custom Profiles:** Display name, bio, and avatar (JPEG, PNG, GIF, WebP — max 2 MB).
+- **Account Deletion:** Users can permanently delete their own account and all associated data.
+- **Admin Panel:** Edit user profiles, toggle admin privileges, disable accounts, and delete users.
+- **Responsive:** Works on mobile and desktop.
 
 ## Tech Stack
 
-- **Backend:** PHP 8.0+
-- **Database:** SQLite3
-- **Frontend:** Vanilla JavaScript (ES6+)
+- **Backend:** PHP 8.0+ (no framework)
+- **Database:** SQLite3 (schema auto-created and versioned)
+- **Frontend:** Vanilla JavaScript (ES6+, async/await, fetch)
 - **Styling:** CSS3 with CSS Variables
 
 ## Getting Started
 
-Magpie is designed to be extremely easy to run. No build steps, no `npm install`, and no `composer install`.
+No build steps, no `npm install`, no `composer install`.
 
 ### Prerequisites
 
-- PHP 8.0 or higher with the `sqlite3` extension.
+PHP 8.0 or higher with the `sqlite3` extension.
 
 ### Running the App
 
@@ -38,16 +42,16 @@ php -S localhost:8000
 
 3. Open your browser and navigate to `http://localhost:8000`.
 
-The first person to register will automatically be granted administrator privileges.
+The first person to register is automatically granted administrator privileges.
 
 ## Project Structure
 
-- `index.php`: The main entry point and single HTML page.
-- `api.php`: The backend API handling all logic and database operations.
-- `js/app.js`: The frontend SPA logic, routing, and rendering.
-- `css/style.css`: All application styles.
-- `uploads/`: Directory for user profile pictures.
-- `magpie.db`: The SQLite database (auto-generated).
+- `index.php` — HTML shell; serves the SPA markup and all modals
+- `api.php` — Entire backend: SQLite init, schema migration, and all API endpoints
+- `js/app.js` — Entire frontend: state management, routing, API calls, DOM rendering
+- `css/style.css` — All application styles
+- `uploads/avatars/` — User avatar storage (created automatically)
+- `magpie.db` — SQLite database (auto-generated on first request)
 
 ## License
 

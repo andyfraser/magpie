@@ -8,7 +8,7 @@ const DB_PATH         = __DIR__ . '/magpie.db';
 const UPLOADS_DIR     = __DIR__ . '/uploads/avatars/';
 const UPLOADS_URL     = '/uploads/avatars/';
 const MAX_POST_LENGTH = 500;
-const SCHEMA_VERSION  = 4;
+const SCHEMA_VERSION  = 5;
 
 // ── Database ──────────────────────────────────────────────
 
@@ -21,8 +21,10 @@ function get_db(): SQLite3 {
     $current = $db->querySingle('SELECT version FROM schema_version LIMIT 1');
     if ((int)$current !== SCHEMA_VERSION) {
         $db->exec('
+            DROP TABLE IF EXISTS notifications;
             DROP TABLE IF EXISTS liked_posts;
             DROP TABLE IF EXISTS posts;
+            DROP TABLE IF EXISTS follows;
             DROP TABLE IF EXISTS users;
             DELETE FROM schema_version;
         ');
@@ -47,6 +49,8 @@ function get_db(): SQLite3 {
             username   TEXT    NOT NULL,
             body       TEXT    NOT NULL,
             likes      INTEGER NOT NULL DEFAULT 0,
+            parent_id  INTEGER REFERENCES posts(id),
+            quote_id   INTEGER REFERENCES posts(id),
             created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS liked_posts (
@@ -58,6 +62,15 @@ function get_db(): SQLite3 {
             follower_id INTEGER NOT NULL REFERENCES users(id),
             followee_id INTEGER NOT NULL REFERENCES users(id),
             PRIMARY KEY (follower_id, followee_id)
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL REFERENCES users(id),
+            actor_id   INTEGER NOT NULL REFERENCES users(id),
+            type       TEXT    NOT NULL,
+            post_id    INTEGER REFERENCES posts(id),
+            read       INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
         );
     ');
     return $db;
@@ -106,18 +119,117 @@ function format_user(array $u): array {
     ];
 }
 
+// Columns and joins for a full post query.
+// $alias is the posts table alias.
+function post_select_cols(string $alias, ?int $uid): string {
+    $liked_col  = $uid ? ", CASE WHEN lp.user_id IS NOT NULL THEN 1 ELSE 0 END AS liked_flag"
+                       : ', 0 AS liked_flag';
+    $follow_col = $uid ? ", CASE WHEN f.follower_id IS NOT NULL THEN 1 ELSE 0 END AS following"
+                       : ', 0 AS following';
+    $a = $alias;
+    return "
+        $a.*,
+        COALESCE(u.display_name, u.username) AS display_name,
+        u.avatar AS user_avatar,
+        (SELECT COUNT(*) FROM posts r WHERE r.parent_id = $a.id) AS reply_count,
+        pu.username AS parent_username,
+        COALESCE(pu.display_name, pu.username) AS parent_display_name,
+        qp.id AS quote_post_id,
+        qp.body AS quote_body,
+        qp.username AS quote_username,
+        qp.created_at AS quote_created_at,
+        COALESCE(qu.display_name, qu.username) AS quote_display_name,
+        qu.avatar AS quote_avatar_file
+        $liked_col $follow_col
+    ";
+}
+
+function post_join_sql(string $alias, ?int $uid): string {
+    $a           = $alias;
+    $liked_join  = $uid ? "LEFT JOIN liked_posts lp ON lp.post_id=$a.id AND lp.user_id=$uid" : '';
+    $follow_join = $uid ? "LEFT JOIN follows f ON f.follower_id=$uid AND f.followee_id=$a.user_id" : '';
+    return "
+        JOIN  users u  ON u.id  = $a.user_id
+        LEFT JOIN posts  pp ON pp.id = $a.parent_id
+        LEFT JOIN users  pu ON pu.id = pp.user_id
+        LEFT JOIN posts  qp ON qp.id = $a.quote_id
+        LEFT JOIN users  qu ON qu.id = qp.user_id
+        $liked_join $follow_join
+    ";
+}
+
+function format_post_row(array $row, ?int $uid): array {
+    $row['id']          = (int)$row['id'];
+    $row['user_id']     = (int)$row['user_id'];
+    $row['likes']       = (int)$row['likes'];
+    $row['created_at']  = (int)$row['created_at'];
+    $row['parent_id']   = isset($row['parent_id']) && $row['parent_id'] !== null ? (int)$row['parent_id'] : null;
+    $row['quote_id']    = isset($row['quote_id'])  && $row['quote_id']  !== null ? (int)$row['quote_id']  : null;
+    $row['reply_count'] = (int)($row['reply_count'] ?? 0);
+    $row['liked']       = (bool)($row['liked_flag'] ?? false);
+    $row['own']         = $uid ? ((int)$row['user_id'] === $uid) : false;
+    $row['following']   = (bool)($row['following'] ?? false);
+    $row['avatar_url']  = !empty($row['user_avatar']) ? UPLOADS_URL . $row['user_avatar'] : null;
+
+    $row['parent_username']     = $row['parent_username']     ?? null;
+    $row['parent_display_name'] = $row['parent_display_name'] ?? null;
+
+    if (!empty($row['quote_post_id'])) {
+        $row['quote'] = [
+            'id'           => (int)$row['quote_post_id'],
+            'body'         => $row['quote_body'],
+            'username'     => $row['quote_username'],
+            'display_name' => $row['quote_display_name'] ?: $row['quote_username'],
+            'created_at'   => (int)$row['quote_created_at'],
+            'avatar_url'   => !empty($row['quote_avatar_file']) ? UPLOADS_URL . $row['quote_avatar_file'] : null,
+        ];
+    } else {
+        $row['quote'] = null;
+    }
+
+    unset($row['user_avatar'], $row['liked_flag'],
+          $row['quote_post_id'], $row['quote_body'], $row['quote_username'],
+          $row['quote_created_at'], $row['quote_display_name'], $row['quote_avatar_file']);
+
+    return $row;
+}
+
+function fetch_post(SQLite3 $db, int $post_id, ?int $uid): ?array {
+    $cols  = post_select_cols('p', $uid);
+    $joins = post_join_sql('p', $uid);
+    $row   = $db->querySingle("SELECT $cols FROM posts p $joins WHERE p.id=$post_id", true);
+    return $row ? format_post_row($row, $uid) : null;
+}
+
+function delete_post_cascade(SQLite3 $db, int $post_id): void {
+    // Delete child replies first
+    $res = $db->query("SELECT id FROM posts WHERE parent_id=$post_id");
+    while ($child = $res->fetchArray(SQLITE3_ASSOC)) {
+        delete_post_cascade($db, (int)$child['id']);
+    }
+    $db->exec("DELETE FROM liked_posts   WHERE post_id=$post_id");
+    $db->exec("DELETE FROM notifications WHERE post_id=$post_id");
+    $db->exec("DELETE FROM posts         WHERE id=$post_id");
+}
+
 function delete_user_data(SQLite3 $db, int $uid): void {
     $user = $db->querySingle("SELECT avatar FROM users WHERE id=$uid", true);
     if ($user && $user['avatar']) {
         $path = UPLOADS_DIR . $user['avatar'];
         if (file_exists($path)) unlink($path);
     }
+    $db->exec("DELETE FROM notifications WHERE user_id=$uid OR actor_id=$uid");
     $db->exec("DELETE FROM follows WHERE follower_id=$uid OR followee_id=$uid");
     $db->exec("DELETE FROM liked_posts WHERE user_id=$uid");
-    $res = $db->query("SELECT id FROM posts WHERE user_id=$uid");
+
+    $res = $db->query("SELECT id FROM posts WHERE user_id=$uid AND parent_id IS NULL");
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
-        $db->exec("DELETE FROM liked_posts WHERE post_id={$row['id']}");
+        delete_post_cascade($db, (int)$row['id']);
     }
+    // Orphaned replies from this user (parent was someone else's post)
+    $db->exec("UPDATE posts SET parent_id=NULL WHERE user_id=$uid AND parent_id IS NOT NULL");
+    $db->exec("DELETE FROM liked_posts WHERE post_id IN (SELECT id FROM posts WHERE user_id=$uid)");
+    $db->exec("DELETE FROM notifications WHERE post_id IN (SELECT id FROM posts WHERE user_id=$uid)");
     $db->exec("DELETE FROM posts WHERE user_id=$uid");
     $db->exec("DELETE FROM users WHERE id=$uid");
 }
@@ -279,7 +391,7 @@ if ($method === 'GET' && $resource === 'users' && !$sub1) {
     }
 
     $res = $db->query("
-        SELECT u.*, 
+        SELECT u.*,
                CASE WHEN f.follower_id IS NOT NULL THEN 1 ELSE 0 END AS following
         FROM   users u
         LEFT JOIN follows f ON f.follower_id=$uid AND f.followee_id=u.id
@@ -301,36 +413,67 @@ if ($method === 'GET' && $resource === 'users' && !$sub1) {
 // POSTS
 // ══════════════════════════════════════════════════════════
 
+// GET /posts/:id/thread
+if ($method === 'GET' && $resource === 'posts' && $id && $sub2 === 'thread') {
+    $uid  = current_user_id();
+    $post = fetch_post($db, $id, $uid);
+    if (!$post) json_error('Post not found', 404);
+
+    // Walk up the ancestor chain
+    $ancestors = [];
+    $pid       = $post['parent_id'];
+    $depth     = 0;
+    while ($pid && $depth < 20) {
+        $ancestor = fetch_post($db, $pid, $uid);
+        if (!$ancestor) break;
+        array_unshift($ancestors, $ancestor);
+        $pid = $ancestor['parent_id'];
+        $depth++;
+    }
+
+    // Get direct replies
+    $cols  = post_select_cols('p', $uid);
+    $joins = post_join_sql('p', $uid);
+    $res   = $db->query("
+        SELECT $cols FROM posts p $joins
+        WHERE p.parent_id=$id
+        ORDER BY p.created_at ASC
+        LIMIT 100
+    ");
+    $replies = [];
+    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+        $replies[] = format_post_row($row, $uid);
+    }
+
+    json_ok(['ancestors' => $ancestors, 'post' => $post, 'replies' => $replies]);
+}
+
 if ($method === 'GET' && $resource === 'posts') {
     $page   = max(1, (int)($_GET['page'] ?? 1));
     $limit  = 20;
     $offset = ($page - 1) * $limit;
     $uid    = current_user_id();
 
-    $feed        = $_GET['feed'] ?? '';
-    $feed_where  = '';
-    $liked_join  = '';
+    $feed       = $_GET['feed'] ?? '';
+    $liked_join = '';
+    $conditions = [];
+
     if ($uid && $feed === 'following') {
-        $feed_where = "WHERE (p.user_id IN (SELECT followee_id FROM follows WHERE follower_id=$uid) OR p.user_id=$uid)";
+        $conditions[] = "(p.user_id IN (SELECT followee_id FROM follows WHERE follower_id=$uid) OR p.user_id=$uid)";
     } elseif ($uid && $feed === 'liked') {
-        $liked_join = "JOIN liked_posts lp ON lp.post_id = p.id AND lp.user_id = $uid";
+        $liked_join   = "JOIN liked_posts lp2 ON lp2.post_id = p.id AND lp2.user_id = $uid";
     }
 
-    $follow_join = $uid ? "LEFT JOIN follows f ON f.follower_id=$uid AND f.followee_id=p.user_id" : '';
-    $follow_col  = $uid ? ", CASE WHEN f.follower_id IS NOT NULL THEN 1 ELSE 0 END AS following" : '';
+    $where_clause = $conditions ? 'WHERE ' . implode(' AND ', $conditions) : '';
+    $cols         = post_select_cols('p', $uid);
+    $joins        = post_join_sql('p', $uid);
 
     $stmt = $db->prepare("
-        SELECT p.*,
-               COALESCE(u.display_name, u.username) AS display_name,
-               u.avatar AS user_avatar
-               $follow_col
-        FROM   posts p
-        JOIN   users u ON u.id = p.user_id
-        $liked_join
-        $follow_join
-        $feed_where
-        ORDER  BY p.created_at DESC
-        LIMIT  :lim OFFSET :off
+        SELECT $cols FROM posts p
+        $liked_join $joins
+        $where_clause
+        ORDER BY p.created_at DESC
+        LIMIT :lim OFFSET :off
     ");
     $stmt->bindValue(':lim', $limit,  SQLITE3_INTEGER);
     $stmt->bindValue(':off', $offset, SQLITE3_INTEGER);
@@ -338,24 +481,10 @@ if ($method === 'GET' && $resource === 'posts') {
 
     $posts = [];
     while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $liked = false; $own = false; $following = false;
-        if ($uid) {
-            $ls = $db->prepare('SELECT 1 FROM liked_posts WHERE post_id=:p AND user_id=:u');
-            $ls->bindValue(':p', $row['id'], SQLITE3_INTEGER);
-            $ls->bindValue(':u', $uid,       SQLITE3_INTEGER);
-            $liked     = (bool)$ls->execute()->fetchArray();
-            $own       = ((int)$row['user_id'] === $uid);
-            $following = (bool)($row['following'] ?? false);
-        }
-        $row['liked']      = $liked;
-        $row['own']        = $own;
-        $row['following']  = $following;
-        $row['avatar_url'] = $row['user_avatar'] ? UPLOADS_URL . $row['user_avatar'] : null;
-        unset($row['user_avatar']);
-        $posts[] = $row;
+        $posts[] = format_post_row($row, $uid);
     }
 
-    $total = (int)$db->querySingle("SELECT COUNT(*) FROM posts p $liked_join $feed_where");
+    $total = (int)$db->querySingle("SELECT COUNT(*) FROM posts p $liked_join $where_clause");
     json_ok(['posts' => $posts, 'total' => $total, 'page' => $page, 'pages' => (int)ceil($total / $limit)]);
 }
 
@@ -364,28 +493,69 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
     $u   = $db->querySingle("SELECT username, disabled FROM users WHERE id=$uid", true);
     if ($u['disabled']) json_error('Your account has been disabled', 403);
 
-    $input = json_decode(file_get_contents('php://input'), true);
-    $body  = trim($input['body'] ?? '');
+    $input     = json_decode(file_get_contents('php://input'), true);
+    $body      = trim($input['body'] ?? '');
+    $parent_id = isset($input['parent_id']) && is_int($input['parent_id']) ? (int)$input['parent_id'] : null;
+    $quote_id  = isset($input['quote_id'])  && is_int($input['quote_id'])  ? (int)$input['quote_id']  : null;
 
     if ($body === '')                       json_error('Post body is required');
     if (mb_strlen($body) > MAX_POST_LENGTH) json_error('Post exceeds ' . MAX_POST_LENGTH . ' character limit');
 
-    $stmt = $db->prepare('INSERT INTO posts (user_id, username, body, created_at) VALUES (:u,:n,:b,:t)');
-    $stmt->bindValue(':u', $uid,              SQLITE3_INTEGER);
-    $stmt->bindValue(':n', $u['username'],    SQLITE3_TEXT);
-    $stmt->bindValue(':b', $body,             SQLITE3_TEXT);
-    $stmt->bindValue(':t', time(),            SQLITE3_INTEGER);
+    if ($parent_id) {
+        $parent = $db->querySingle("SELECT id, user_id FROM posts WHERE id=$parent_id", true);
+        if (!$parent) json_error('Parent post not found', 404);
+    }
+    if ($quote_id) {
+        $quoted = $db->querySingle("SELECT id, user_id FROM posts WHERE id=$quote_id", true);
+        if (!$quoted) json_error('Quoted post not found', 404);
+    }
+
+    $pid_sql = $parent_id ? $parent_id : 'NULL';
+    $qid_sql = $quote_id  ? $quote_id  : 'NULL';
+
+    $stmt = $db->prepare('
+        INSERT INTO posts (user_id, username, body, parent_id, quote_id, created_at)
+        VALUES (:u,:n,:b,:p,:q,:t)
+    ');
+    $stmt->bindValue(':u', $uid,           SQLITE3_INTEGER);
+    $stmt->bindValue(':n', $u['username'], SQLITE3_TEXT);
+    $stmt->bindValue(':b', $body,          SQLITE3_TEXT);
+    $stmt->bindValue(':p', $parent_id,     $parent_id ? SQLITE3_INTEGER : SQLITE3_NULL);
+    $stmt->bindValue(':q', $quote_id,      $quote_id  ? SQLITE3_INTEGER : SQLITE3_NULL);
+    $stmt->bindValue(':t', time(),         SQLITE3_INTEGER);
     $stmt->execute();
 
-    $nid  = $db->lastInsertRowID();
-    $post = $db->querySingle("
-        SELECT p.*, COALESCE(u.display_name, u.username) AS display_name, u.avatar AS user_avatar
-        FROM posts p JOIN users u ON u.id=p.user_id WHERE p.id=$nid
-    ", true);
-    $post['liked']     = false;
-    $post['own']       = true;
-    $post['avatar_url'] = $post['user_avatar'] ? UPLOADS_URL . $post['user_avatar'] : null;
-    unset($post['user_avatar']);
+    $nid = $db->lastInsertRowID();
+
+    // Create reply notification
+    if ($parent_id && isset($parent)) {
+        $target_uid = (int)$parent['user_id'];
+        if ($target_uid !== $uid) {
+            $stmt2 = $db->prepare('INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,:t,:p,:ts)');
+            $stmt2->bindValue(':u',  $target_uid,  SQLITE3_INTEGER);
+            $stmt2->bindValue(':a',  $uid,          SQLITE3_INTEGER);
+            $stmt2->bindValue(':t',  'reply',       SQLITE3_TEXT);
+            $stmt2->bindValue(':p',  $nid,          SQLITE3_INTEGER);
+            $stmt2->bindValue(':ts', time(),         SQLITE3_INTEGER);
+            $stmt2->execute();
+        }
+    }
+
+    // Create quote notification
+    if ($quote_id && isset($quoted)) {
+        $target_uid = (int)$quoted['user_id'];
+        if ($target_uid !== $uid) {
+            $stmt3 = $db->prepare('INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,:t,:p,:ts)');
+            $stmt3->bindValue(':u',  $target_uid,  SQLITE3_INTEGER);
+            $stmt3->bindValue(':a',  $uid,          SQLITE3_INTEGER);
+            $stmt3->bindValue(':t',  'quote',       SQLITE3_TEXT);
+            $stmt3->bindValue(':p',  $nid,          SQLITE3_INTEGER);
+            $stmt3->bindValue(':ts', time(),         SQLITE3_INTEGER);
+            $stmt3->execute();
+        }
+    }
+
+    $post = fetch_post($db, $nid, $uid);
     json_ok($post);
 }
 
@@ -405,25 +575,15 @@ if ($method === 'POST' && $resource === 'posts' && $id && $sub2 === 'like') {
         $s->bindValue(':u', $uid, SQLITE3_INTEGER);
         $s->execute();
         $db->exec("UPDATE posts SET likes=MAX(0,likes-1) WHERE id=$id");
-        $liked = false;
     } else {
         $s = $db->prepare('INSERT INTO liked_posts (post_id,user_id) VALUES (:p,:u)');
         $s->bindValue(':p', $id,  SQLITE3_INTEGER);
         $s->bindValue(':u', $uid, SQLITE3_INTEGER);
         $s->execute();
         $db->exec("UPDATE posts SET likes=likes+1 WHERE id=$id");
-        $liked = true;
     }
 
-    $post = $db->querySingle("
-        SELECT p.*, COALESCE(u.display_name, u.username) AS display_name, u.avatar AS user_avatar
-        FROM posts p JOIN users u ON u.id=p.user_id WHERE p.id=$id
-    ", true);
-    $post['liked']     = $liked;
-    $post['own']       = ((int)$post['user_id'] === $uid);
-    $post['avatar_url'] = $post['user_avatar'] ? UPLOADS_URL . $post['user_avatar'] : null;
-    unset($post['user_avatar']);
-    json_ok($post);
+    json_ok(fetch_post($db, $id, $uid));
 }
 
 if ($method === 'DELETE' && $resource === 'posts' && $id && $sub1 !== 'users') {
@@ -432,9 +592,59 @@ if ($method === 'DELETE' && $resource === 'posts' && $id && $sub1 !== 'users') {
     if (!$post)                         json_error('Post not found', 404);
     if ((int)$post['user_id'] !== $uid) json_error('Forbidden', 403);
 
-    $db->exec("DELETE FROM liked_posts WHERE post_id=$id");
-    $db->exec("DELETE FROM posts WHERE id=$id");
+    delete_post_cascade($db, $id);
     json_ok(['deleted' => true]);
+}
+
+// ══════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ══════════════════════════════════════════════════════════
+
+if ($method === 'GET' && $resource === 'notifications') {
+    $uid = require_auth();
+
+    $res = $db->query("
+        SELECT n.*,
+               a.username     AS actor_username,
+               a.display_name AS actor_display_name,
+               a.avatar       AS actor_avatar,
+               p.body         AS post_body,
+               pp.id          AS parent_post_id
+        FROM   notifications n
+        JOIN   users a ON a.id = n.actor_id
+        LEFT JOIN posts p  ON p.id  = n.post_id
+        LEFT JOIN posts pp ON pp.id = p.parent_id
+        WHERE  n.user_id = $uid
+        ORDER  BY n.created_at DESC
+        LIMIT  50
+    ");
+
+    $notifs = [];
+    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+        $notifs[] = [
+            'id'           => (int)$row['id'],
+            'type'         => $row['type'],
+            'read'         => (bool)$row['read'],
+            'created_at'   => (int)$row['created_at'],
+            'post_id'      => $row['post_id'] ? (int)$row['post_id'] : null,
+            'parent_post_id' => $row['parent_post_id'] ? (int)$row['parent_post_id'] : null,
+            'post_body'    => $row['post_body'] ? mb_substr($row['post_body'], 0, 100) : null,
+            'actor' => [
+                'username'     => $row['actor_username'],
+                'display_name' => $row['actor_display_name'] ?: $row['actor_username'],
+                'avatar'       => $row['actor_avatar'] ? UPLOADS_URL . $row['actor_avatar'] : null,
+            ],
+        ];
+    }
+
+    $unread = (int)$db->querySingle("SELECT COUNT(*) FROM notifications WHERE user_id=$uid AND read=0");
+    json_ok(['notifications' => $notifs, 'unread' => $unread]);
+}
+
+if ($method === 'POST' && $resource === 'notifications' && $sub1 === 'read') {
+    $uid = require_auth();
+    $db->exec("UPDATE notifications SET read=1 WHERE user_id=$uid");
+    json_ok(['ok' => true]);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -540,6 +750,14 @@ if ($method === 'POST' && $resource === 'users' && $sub1 && $sub1 !== 'me' && !i
         $s->bindValue(':e', $tid, SQLITE3_INTEGER);
         $s->execute();
         $following = true;
+
+        // Create follow notification
+        $sn = $db->prepare('INSERT INTO notifications (user_id,actor_id,type,created_at) VALUES (:u,:a,:t,:ts)');
+        $sn->bindValue(':u',  $tid,     SQLITE3_INTEGER);
+        $sn->bindValue(':a',  $uid,     SQLITE3_INTEGER);
+        $sn->bindValue(':t',  'follow', SQLITE3_TEXT);
+        $sn->bindValue(':ts', time(),   SQLITE3_INTEGER);
+        $sn->execute();
     }
 
     $follower_count = (int)$db->querySingle("SELECT COUNT(*) FROM follows WHERE followee_id=$tid");

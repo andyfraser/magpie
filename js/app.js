@@ -36,6 +36,8 @@ const navProfile     = document.getElementById('nav-profile');
 const navLiked       = document.getElementById('nav-liked');
 const navFollowing   = document.getElementById('nav-following');
 const navAdmin       = document.getElementById('nav-admin');
+const navNotifications = document.getElementById('nav-notifications');
+const notifBadge     = document.getElementById('notif-badge');
 
 const feed           = document.getElementById('feed');
 const loadMoreWrap   = document.getElementById('load-more-wrap');
@@ -73,12 +75,35 @@ const adminEditErr   = document.getElementById('admin-edit-error');
 const adminEditCancel= document.getElementById('admin-edit-cancel');
 const adminEditSave  = document.getElementById('admin-edit-save');
 
+// Thread modal
+const threadModal    = document.getElementById('thread-modal');
+const threadContent  = document.getElementById('thread-content');
+const threadClose    = document.getElementById('thread-close');
+
+// Compose modal (reply / quote)
+const composeModal       = document.getElementById('compose-modal');
+const composeModalCtx    = document.getElementById('compose-modal-context');
+const composeModalAvatar = document.getElementById('compose-modal-avatar');
+const composeModalLabel  = document.getElementById('compose-modal-label');
+const composeModalInput  = document.getElementById('compose-modal-input');
+const composeModalQuote  = document.getElementById('compose-modal-quote-wrap');
+const composeModalRing   = document.getElementById('compose-modal-ring');
+const composeModalFill   = document.getElementById('compose-modal-ring-fill');
+const composeModalLeft   = document.getElementById('compose-modal-remaining');
+const composeModalCancel = document.getElementById('compose-modal-cancel');
+const composeModalSubmit = document.getElementById('compose-modal-submit');
+
 // ── State ─────────────────────────────────────────────────
 let currentUser  = null;
 let currentPage  = 1;
 let totalPages   = 1;
 let isSubmitting = false;
 let currentFeed  = 'for-you';
+
+// Compose modal state
+let composeMode     = null; // 'reply' | 'quote'
+let composeTargetId = null; // post id
+let composeIsSubmitting = false;
 
 // ── Boot ──────────────────────────────────────────────────
 (async () => {
@@ -119,10 +144,11 @@ function showView(name) {
   document.querySelectorAll('.nav-link').forEach(l =>
     l.classList.toggle('active', l.dataset.view === name)
   );
-  if (name === 'profile')   initProfileView();
-  if (name === 'liked')     loadLikedPosts(1, true);
-  if (name === 'following') loadUsers();
-  if (name === 'admin')     loadAdminUsers();
+  if (name === 'profile')       initProfileView();
+  if (name === 'liked')         loadLikedPosts(1, true);
+  if (name === 'following')     loadUsers();
+  if (name === 'admin')         loadAdminUsers();
+  if (name === 'notifications') loadNotifications();
 }
 
 // ── People (Following) view logic ─────────────────────────
@@ -170,7 +196,7 @@ function renderUsers(users) {
   users.forEach(u => {
     const div = document.createElement('div');
     div.className = 'user-item';
-    
+
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
     setAvatarEl(avatar, u);
@@ -188,7 +214,6 @@ function renderUsers(users) {
     followBtn.className = 'btn-follow' + (u.following ? ' following' : '');
     followBtn.addEventListener('click', async () => {
       await toggleFollow(u.username);
-      // If we are in the following tab and just unfollowed, remove from list
       if (currentFollowingTab === 'following') {
         div.remove();
         if (usersList.children.length === 0) {
@@ -284,13 +309,15 @@ logoutBtn.addEventListener('click', async () => {
   currentUser = null;
   currentFeed = 'for-you';
   document.querySelectorAll('.feed-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'for-you'));
-  composeEl.style.display   = 'none';
-  sidebarUser.style.display = 'none';
-  logoutBtn.style.display   = 'none';
-  navProfile.style.display  = 'none';
-  navLiked.style.display    = 'none';
-  navFollowing.style.display = 'none';
-  navAdmin.style.display    = 'none';
+  composeEl.style.display        = 'none';
+  sidebarUser.style.display      = 'none';
+  logoutBtn.style.display        = 'none';
+  navProfile.style.display       = 'none';
+  navLiked.style.display         = 'none';
+  navFollowing.style.display     = 'none';
+  navAdmin.style.display         = 'none';
+  navNotifications.style.display = 'none';
+  notifBadge.classList.add('hidden');
   loginUsernameI.value = loginPasswordI.value = '';
   loginError.textContent = '';
   showAuthModal('login');
@@ -303,28 +330,26 @@ function onLogin(user) {
   currentUser = user;
   hideAuthModal();
   updateAuthUI(user);
-  composeEl.style.display   = '';
-  sidebarUser.style.display = '';
-  logoutBtn.style.display   = '';
-  navProfile.style.display  = '';
-  navLiked.style.display    = '';
-  navFollowing.style.display = '';
-  navAdmin.style.display    = user.is_admin ? '' : 'none';
+  composeEl.style.display        = '';
+  sidebarUser.style.display      = '';
+  logoutBtn.style.display        = '';
+  navProfile.style.display       = '';
+  navLiked.style.display         = '';
+  navFollowing.style.display     = '';
+  navNotifications.style.display = '';
+  navAdmin.style.display         = user.is_admin ? '' : 'none';
   postInput.focus();
+  refreshNotifCount();
 }
 
 function updateAuthUI(user) {
-  const name    = user.display_name || user.username;
-  const initial = name[0].toUpperCase();
-  const color   = avatarColor(user.username);
-
-  // Sidebar
-  sidebarDN.textContent     = name;
+  sidebarDN.textContent     = user.display_name || user.username;
   sidebarHandle.textContent = '@' + user.username;
   setAvatarEl(sidebarAvatar, user);
-
-  // Compose
   setAvatarEl(composeAvatar, user);
+  if (currentUser) {
+    setAvatarEl(composeModalAvatar, currentUser);
+  }
 }
 
 function setAvatarEl(el, user) {
@@ -339,7 +364,7 @@ function setAvatarEl(el, user) {
   }
 }
 
-// ── Compose ───────────────────────────────────────────────
+// ── Compose (home) ────────────────────────────────────────
 postInput.addEventListener('input', updateCharCount);
 postInput.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submitPost();
@@ -377,9 +402,7 @@ async function submitPost() {
     });
     postInput.value = '';
     updateCharCount();
-    const empty = feed.querySelector('.empty-state');
-    if (empty) empty.remove();
-    feed.insertBefore(renderPost(post), feed.firstChild);
+    await loadPosts(1, true);
   } catch (e) {
     showToast(e.message, true);
   } finally {
@@ -415,12 +438,22 @@ async function loadPosts(page, replace) {
   }
 }
 
-function renderPost(post) {
+function renderPost(post, opts = {}) {
+  const { inThread = false, isHighlight = false } = opts;
+
   const div = document.createElement('div');
-  div.className  = 'post';
+  div.className  = 'post' + (isHighlight ? ' post-highlight' : '');
   div.dataset.id = post.id;
 
   const displayName = post.display_name || post.username;
+
+  const replyingTo = post.parent_id && post.parent_username
+    ? `<div class="reply-label">Replying to <span class="reply-to-handle">@${esc(post.parent_display_name || post.parent_username)}</span></div>`
+    : '';
+
+  const quoteCard = post.quote ? renderQuoteCard(post.quote) : '';
+
+  const replyCountLabel = post.reply_count > 0 ? post.reply_count : '';
 
   div.innerHTML = `
     ${postAvatarHtml(post)}
@@ -431,8 +464,17 @@ function renderPost(post) {
         <span class="post-sep">·</span>
         <span class="post-time" title="${new Date(post.created_at * 1000).toLocaleString()}">${timeAgo(post.created_at)}</span>
       </div>
-      <div class="post-body">${esc(post.body)}</div>
+      ${replyingTo}
+      <div class="post-body post-body-clickable">${esc(post.body)}</div>
+      ${quoteCard}
       <div class="post-actions">
+        <button class="action-btn reply-btn" data-id="${post.id}" title="Reply">
+          ${replySvg()}
+          <span class="reply-count">${replyCountLabel}</span>
+        </button>
+        <button class="action-btn quote-btn" data-id="${post.id}" title="Quote">
+          ${quoteSvg()}
+        </button>
         <button class="action-btn like-btn ${post.liked ? 'liked' : ''}" data-id="${post.id}">
           ${heartSvg(post.liked)}
           <span class="like-count">${post.likes > 0 ? post.likes : ''}</span>
@@ -442,14 +484,57 @@ function renderPost(post) {
       </div>
     </div>`;
 
-  div.querySelector('.like-btn').addEventListener('click', () => {
+  // Click post body/meta to open thread (not action buttons)
+  div.querySelector('.post-body-clickable').addEventListener('click', () => openThread(post.id));
+  div.querySelector('.post-meta').addEventListener('click', () => openThread(post.id));
+
+  div.querySelector('.reply-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    if (!currentUser) { showToast('Sign in to reply', true); return; }
+    openComposeModal('reply', post);
+  });
+
+  div.querySelector('.quote-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    if (!currentUser) { showToast('Sign in to quote', true); return; }
+    openComposeModal('quote', post);
+  });
+
+  div.querySelector('.like-btn').addEventListener('click', e => {
+    e.stopPropagation();
     if (!currentUser) { showToast('Sign in to like posts', true); return; }
     toggleLike(post.id, div);
   });
-  div.querySelector('.follow-btn')?.addEventListener('click', () => toggleFollow(post.username));
-  div.querySelector('.delete-btn')?.addEventListener('click', () => deletePost(post.id, div));
+
+  div.querySelector('.follow-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleFollow(post.username);
+  });
+
+  div.querySelector('.delete-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    deletePost(post.id, div);
+  });
 
   return div;
+}
+
+function renderQuoteCard(quote) {
+  const dn = quote.display_name || quote.username;
+  const avatarHtml = quote.avatar_url
+    ? `<img src="${esc(quote.avatar_url)}" alt="">`
+    : `<span style="background:${avatarColor(quote.username)};width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#fff;flex-shrink:0">${esc(quote.username[0].toUpperCase())}</span>`;
+  return `
+    <div class="quote-card">
+      <div class="quote-card-meta">
+        <span class="quote-avatar">${avatarHtml}</span>
+        <span class="quote-username">${esc(dn)}</span>
+        <span class="quote-handle">@${esc(quote.username)}</span>
+        <span class="post-sep">·</span>
+        <span class="quote-time">${timeAgo(quote.created_at)}</span>
+      </div>
+      <div class="quote-body">${esc(quote.body)}</div>
+    </div>`;
 }
 
 function postAvatarHtml(post) {
@@ -488,17 +573,183 @@ async function toggleFollow(username) {
     const data = await apiFetch(`users/${username}/follow`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
-    // Update all follow buttons for this user across the feed
     document.querySelectorAll(`.follow-btn[data-username="${username}"]`).forEach(btn => {
       btn.classList.toggle('following', data.following);
       btn.title = (data.following ? 'Unfollow' : 'Follow') + ' @' + username;
       btn.innerHTML = followSvg(data.following);
     });
-    // If on following tab and just unfollowed, reload feed
     if (currentFeed === 'following' && !data.following) loadPosts(1, true);
     showToast(data.following ? `Following @${username}` : `Unfollowed @${username}`);
+    if (data.following) refreshNotifCount();
   } catch (e) { showToast(e.message, true); }
 }
+
+// ── Thread modal ──────────────────────────────────────────
+async function openThread(postId) {
+  threadContent.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
+  threadModal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  try {
+    const data = await apiFetch(`posts/${postId}/thread`);
+    renderThread(data);
+  } catch (e) {
+    threadContent.innerHTML = `<div class="empty-state"><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function closeThread() {
+  threadModal.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+threadClose.addEventListener('click', closeThread);
+threadModal.addEventListener('click', e => {
+  if (e.target === threadModal) closeThread();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (!threadModal.classList.contains('hidden'))   closeThread();
+    if (!composeModal.classList.contains('hidden'))  closeComposeModal();
+  }
+});
+
+function renderThread(data) {
+  threadContent.innerHTML = '';
+  const { ancestors, post, replies } = data;
+
+  ancestors.forEach((ancestor, i) => {
+    const el = renderPost(ancestor, { inThread: true });
+    el.classList.add('thread-ancestor');
+    if (i < ancestors.length - 1 || true) el.classList.add('thread-connected');
+    threadContent.appendChild(el);
+  });
+
+  const mainEl = renderPost(post, { inThread: true, isHighlight: true });
+  threadContent.appendChild(mainEl);
+
+  if (replies.length > 0) {
+    const sep = document.createElement('div');
+    sep.className = 'thread-sep';
+    sep.textContent = `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`;
+    threadContent.appendChild(sep);
+
+    replies.forEach(r => {
+      threadContent.appendChild(renderPost(r, { inThread: true }));
+    });
+  } else {
+    const none = document.createElement('div');
+    none.className = 'thread-no-replies';
+    none.textContent = 'No replies yet';
+    threadContent.appendChild(none);
+  }
+
+  // Scroll highlighted post into view
+  setTimeout(() => {
+    const highlight = threadContent.querySelector('.post-highlight');
+    if (highlight) highlight.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, 50);
+}
+
+// ── Compose modal (reply / quote) ─────────────────────────
+function openComposeModal(mode, post) {
+  composeMode     = mode;
+  composeTargetId = post.id;
+
+  if (currentUser) setAvatarEl(composeModalAvatar, currentUser);
+
+  if (mode === 'reply') {
+    composeModalInput.placeholder = 'Post your reply…';
+    composeModalLabel.style.display = '';
+    composeModalLabel.innerHTML = `Replying to <span class="reply-to-handle">@${esc(post.display_name || post.username)}</span>`;
+    composeModalCtx.innerHTML = '';
+    // Show original post as context
+    const contextPost = document.createElement('div');
+    contextPost.className = 'compose-context-post';
+    contextPost.innerHTML = `
+      ${postAvatarHtml(post)}
+      <div class="post-content">
+        <div class="post-meta">
+          <span class="post-username">${esc(post.display_name || post.username)}</span>
+          <span class="post-handle">@${esc(post.username)}</span>
+        </div>
+        <div class="post-body">${esc(post.body)}</div>
+      </div>`;
+    composeModalCtx.appendChild(contextPost);
+    composeModalQuote.style.display = 'none';
+    composeModalQuote.innerHTML = '';
+  } else {
+    // quote
+    composeModalInput.placeholder = 'Add a comment…';
+    composeModalLabel.style.display = 'none';
+    composeModalCtx.innerHTML = '';
+    composeModalQuote.style.display = '';
+    composeModalQuote.innerHTML = renderQuoteCard(post);
+  }
+
+  composeModalInput.value = '';
+  updateComposeModalCount();
+  composeModal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => composeModalInput.focus(), 50);
+}
+
+function closeComposeModal() {
+  composeModal.classList.add('hidden');
+  document.body.style.overflow = '';
+  composeMode = null;
+  composeTargetId = null;
+}
+
+composeModalCancel.addEventListener('click', closeComposeModal);
+composeModal.addEventListener('click', e => {
+  if (e.target === composeModal) closeComposeModal();
+});
+
+composeModalInput.addEventListener('input', updateComposeModalCount);
+composeModalInput.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') composeModalSubmit.click();
+});
+
+function updateComposeModalCount() {
+  const len  = composeModalInput.value.length;
+  const left = MAX_CHARS - len;
+  const pct  = Math.min(len / MAX_CHARS, 1);
+
+  composeModalSubmit.disabled = len === 0 || left < 0 || composeIsSubmitting;
+  composeModalFill.setAttribute('stroke-dashoffset', CIRC * (1 - pct));
+  composeModalRing.setAttribute('class', 'char-ring' + (left < 0 ? ' danger' : left < 20 ? ' warn' : ''));
+  composeModalLeft.textContent = left <= 20 ? left : '';
+  composeModalLeft.className   = 'char-remaining' + (left < 0 ? ' danger' : '');
+}
+
+composeModalSubmit.addEventListener('click', async () => {
+  if (composeIsSubmitting || !currentUser || !composeTargetId) return;
+  const body = composeModalInput.value.trim();
+  if (!body) return;
+
+  const payload = { body };
+  if (composeMode === 'reply') payload.parent_id = composeTargetId;
+  if (composeMode === 'quote') payload.quote_id  = composeTargetId;
+
+  composeIsSubmitting = composeModalSubmit.disabled = true;
+  try {
+    await apiFetch('posts', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+    closeComposeModal();
+    showToast(composeMode === 'reply' ? 'Reply posted' : 'Quote posted');
+
+    // Refresh feed
+    loadPosts(1, true);
+  } catch (e) {
+    showToast(e.message, true);
+  } finally {
+    composeIsSubmitting = false;
+    updateComposeModalCount();
+  }
+});
 
 // ── Liked view ────────────────────────────────────────────
 const likedFeed        = document.getElementById('liked-feed');
@@ -529,6 +780,93 @@ async function loadLikedPosts(page, replace) {
   } finally {
     likedLoadMoreBtn.disabled = false;
   }
+}
+
+// ── Notifications ─────────────────────────────────────────
+async function refreshNotifCount() {
+  if (!currentUser) return;
+  try {
+    const data = await apiFetch('notifications');
+    updateNotifBadge(data.unread);
+  } catch {}
+}
+
+function updateNotifBadge(count) {
+  if (count > 0) {
+    notifBadge.textContent = count > 99 ? '99+' : count;
+    notifBadge.classList.remove('hidden');
+  } else {
+    notifBadge.classList.add('hidden');
+  }
+}
+
+// Poll for new notifications every 60 s
+setInterval(() => { if (currentUser) refreshNotifCount(); }, 60000);
+
+async function loadNotifications() {
+  const list = document.getElementById('notifications-list');
+  list.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
+  try {
+    const data = await apiFetch('notifications');
+    updateNotifBadge(data.unread);
+    renderNotifications(data.notifications);
+    // Mark all as read
+    if (data.unread > 0) {
+      await apiFetch('notifications/read', { method: 'POST' }).catch(() => {});
+      updateNotifBadge(0);
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="empty-state"><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderNotifications(notifs) {
+  const list = document.getElementById('notifications-list');
+  if (notifs.length === 0) {
+    list.innerHTML = '<div class="empty-state"><h2>No notifications yet</h2><p>You\'ll see activity here when someone follows or replies to you.</p></div>';
+    return;
+  }
+  list.innerHTML = '';
+  notifs.forEach(n => {
+    const item = document.createElement('div');
+    item.className = 'notif-item' + (n.read ? '' : ' notif-unread');
+
+    const actor = n.actor;
+    const avatarHtml = actor.avatar
+      ? `<div class="avatar notif-avatar"><img src="${esc(actor.avatar)}" alt=""></div>`
+      : `<div class="avatar notif-avatar" style="background:${avatarColor(actor.username)}">${actor.display_name[0].toUpperCase()}</div>`;
+
+    let icon = '', text = '';
+    if (n.type === 'follow') {
+      icon = `<span class="notif-icon notif-icon-follow">${followNotifSvg()}</span>`;
+      text = `<strong>${esc(actor.display_name)}</strong> followed you`;
+    } else if (n.type === 'reply') {
+      icon = `<span class="notif-icon notif-icon-reply">${replySvg()}</span>`;
+      text = `<strong>${esc(actor.display_name)}</strong> replied to your post`;
+    } else if (n.type === 'quote') {
+      icon = `<span class="notif-icon notif-icon-quote">${quoteSvg()}</span>`;
+      text = `<strong>${esc(actor.display_name)}</strong> quoted your post`;
+    }
+
+    const snippet = n.post_body ? `<div class="notif-snippet">${esc(n.post_body)}</div>` : '';
+
+    item.innerHTML = `
+      <div class="notif-icon-col">${icon}</div>
+      <div class="notif-body">
+        ${avatarHtml}
+        <div class="notif-text">${text}</div>
+        ${snippet}
+        <div class="notif-time">${timeAgo(n.created_at)}</div>
+      </div>`;
+
+    if (n.post_id) {
+      item.style.cursor = 'pointer';
+      const threadId = n.parent_post_id || n.post_id;
+      item.addEventListener('click', () => openThread(threadId));
+    }
+
+    list.appendChild(item);
+  });
 }
 
 // ── Profile view ──────────────────────────────────────────
@@ -600,11 +938,12 @@ deleteAcctBtn.addEventListener('click', async () => {
   try {
     await apiFetch('users/me', { method: 'DELETE' });
     currentUser = null;
-    composeEl.style.display   = 'none';
-    sidebarUser.style.display = 'none';
-    logoutBtn.style.display   = 'none';
-    navProfile.style.display  = 'none';
-    navAdmin.style.display    = 'none';
+    composeEl.style.display        = 'none';
+    sidebarUser.style.display      = 'none';
+    logoutBtn.style.display        = 'none';
+    navProfile.style.display       = 'none';
+    navAdmin.style.display         = 'none';
+    navNotifications.style.display = 'none';
     showView('home');
     showAuthModal('login');
     loadPosts(1, true);
@@ -672,7 +1011,6 @@ function renderAdminUserRow(u) {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ disabled: !u.disabled }),
       });
-      // Replace row in place
       const updated = data.user;
       updated.post_count = u.post_count;
       row.replaceWith(renderAdminUserRow(updated));
@@ -704,7 +1042,6 @@ function openAdminEdit(u) {
   adminEditDis.checked   = u.disabled;
   adminEditErr.textContent = '';
 
-  // Prevent self-lockout
   const isSelf = u.id === currentUser?.id;
   adminEditAdmin.disabled = isSelf;
   adminEditDis.disabled   = isSelf;
@@ -733,17 +1070,14 @@ adminEditSave.addEventListener('click', async () => {
     });
     adminEditModal.classList.add('hidden');
     showToast('User updated');
-    // Refresh the row
     const row = document.querySelector(`.admin-user[data-uid="${tid}"]`);
     if (row) {
       const updated = data.user;
-      // Restore post_count from existing row
       const sub = row.querySelector('.admin-user-sub')?.textContent || '';
       const match = sub.match(/(\d+) post/);
       updated.post_count = match ? parseInt(match[1]) : 0;
       row.replaceWith(renderAdminUserRow(updated));
     }
-    // If editing self, update local state
     if (tid === currentUser?.id) {
       currentUser = { ...currentUser, ...data.user };
       updateAuthUI(currentUser);
@@ -793,6 +1127,18 @@ function followSvg(following) {
   return following
     ? `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>`
     : `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>`;
+}
+
+function replySvg() {
+  return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+}
+
+function quoteSvg() {
+  return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
+}
+
+function followNotifSvg() {
+  return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>`;
 }
 
 function showToast(msg, isError = false) {
