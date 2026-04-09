@@ -9,6 +9,8 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 - **Quote Posts:** Quote-repost with added commentary.
 - **Likes:** Like and unlike posts; view all your liked posts in a dedicated feed.
 - **Follow System:** Follow users; filter your home feed to show only people you follow.
+- **Email Verification:** Verify your email address (required before you can post).
+- **Password Reset:** Recover access to your account with secure reset links.
 - **Notifications:** Get notified when someone replies to, quotes, or follows you; unread badge in the sidebar.
 - **User Discovery:** Search users by username or display name.
 - **Custom Profiles:** Display name, bio, and avatar (JPEG, PNG, GIF, WebP — max 2 MB).
@@ -34,13 +36,21 @@ PHP 8.0 or higher with the `sqlite3` extension.
 ### Running the App
 
 1. Clone or download the repository.
-2. Start the PHP built-in server from the root directory:
-
-```bash
-php -S localhost:8000
-```
-
-3. Open your browser and navigate to `http://localhost:8000`.
+2. **Local Email (Optional):** To test verification and password resets, use [Mailpit](https://github.com/axllent/mailpit):
+   ```bash
+   brew install mailpit
+   mailpit
+   ```
+   Configure your `php.ini` (use `php --ini` to find it) to point to Mailpit:
+   ```ini
+   # For Apple Silicon (M1/M2/M3) Macs
+   sendmail_path = /opt/homebrew/bin/mailpit sendmail
+   ```
+3. Start the PHP built-in server:
+   ```bash
+   php -S localhost:8000
+   ```
+4. Open `http://localhost:8000` in your browser.
 
 The first person to register is automatically granted administrator privileges.
 
