@@ -106,9 +106,41 @@ function require_auth(): int {
 
 function require_admin(SQLite3 $db): int {
     $uid  = require_auth();
-    $user = $db->querySingle("SELECT is_admin FROM users WHERE id=$uid", true);
+    $user = db_query_single($db, 'SELECT is_admin FROM users WHERE id=:id', [':id' => $uid], true);
     if (!$user || !$user['is_admin']) json_error('Forbidden', 403);
     return $uid;
+}
+
+// ── Database Helpers ──────────────────────────────────────
+
+function db_exec(SQLite3 $db, string $sql, array $params = []): void {
+    $stmt = $db->prepare($sql);
+    foreach ($params as $key => $val) {
+        $type = is_int($val) ? SQLITE3_INTEGER : (is_float($val) ? SQLITE3_FLOAT : (is_null($val) ? SQLITE3_NULL : SQLITE3_TEXT));
+        $stmt->bindValue($key, $val, $type);
+    }
+    $stmt->execute();
+}
+
+function db_query(SQLite3 $db, string $sql, array $params = []): SQLite3Result {
+    $stmt = $db->prepare($sql);
+    foreach ($params as $key => $val) {
+        $type = is_int($val) ? SQLITE3_INTEGER : (is_float($val) ? SQLITE3_FLOAT : (is_null($val) ? SQLITE3_NULL : SQLITE3_TEXT));
+        $stmt->bindValue($key, $val, $type);
+    }
+    return $stmt->execute();
+}
+
+function db_query_single(SQLite3 $db, string $sql, array $params = [], bool $entire_row = false): mixed {
+    $stmt = $db->prepare($sql);
+    foreach ($params as $key => $val) {
+        $type = is_int($val) ? SQLITE3_INTEGER : (is_float($val) ? SQLITE3_FLOAT : (is_null($val) ? SQLITE3_NULL : SQLITE3_TEXT));
+        $stmt->bindValue($key, $val, $type);
+    }
+    $result = $stmt->execute();
+    $row = $result->fetchArray($entire_row ? SQLITE3_ASSOC : SQLITE3_NUM);
+    if ($row === false) return null;
+    return $entire_row ? $row : $row[0];
 }
 
 function format_user(array $u): array {
@@ -279,41 +311,41 @@ function format_post_row(array $row, ?int $uid): array {
 function fetch_post(SQLite3 $db, int $post_id, ?int $uid): ?array {
     $cols  = post_select_cols('p', $uid);
     $joins = post_join_sql('p', $uid);
-    $row   = $db->querySingle("SELECT $cols FROM posts p $joins WHERE p.id=$post_id", true);
+    $row   = db_query_single($db, "SELECT $cols FROM posts p $joins WHERE p.id=:id", [':id' => $post_id], true);
     return $row ? format_post_row($row, $uid) : null;
 }
 
 function delete_post_cascade(SQLite3 $db, int $post_id): void {
     // Delete child replies first
-    $res = $db->query("SELECT id FROM posts WHERE parent_id=$post_id");
+    $res = db_query($db, 'SELECT id FROM posts WHERE parent_id=:id', [':id' => $post_id]);
     while ($child = $res->fetchArray(SQLITE3_ASSOC)) {
         delete_post_cascade($db, (int)$child['id']);
     }
-    $db->exec("DELETE FROM liked_posts   WHERE post_id=$post_id");
-    $db->exec("DELETE FROM notifications WHERE post_id=$post_id");
-    $db->exec("DELETE FROM posts         WHERE id=$post_id");
+    db_exec($db, 'DELETE FROM liked_posts   WHERE post_id=:id', [':id' => $post_id]);
+    db_exec($db, 'DELETE FROM notifications WHERE post_id=:id', [':id' => $post_id]);
+    db_exec($db, 'DELETE FROM posts         WHERE id=:id',      [':id' => $post_id]);
 }
 
 function delete_user_data(SQLite3 $db, int $uid): void {
-    $user = $db->querySingle("SELECT avatar FROM users WHERE id=$uid", true);
+    $user = db_query_single($db, 'SELECT avatar FROM users WHERE id=:id', [':id' => $uid], true);
     if ($user && $user['avatar']) {
         $path = UPLOADS_DIR . $user['avatar'];
         if (file_exists($path)) unlink($path);
     }
-    $db->exec("DELETE FROM notifications WHERE user_id=$uid OR actor_id=$uid");
-    $db->exec("DELETE FROM follows WHERE follower_id=$uid OR followee_id=$uid");
-    $db->exec("DELETE FROM liked_posts WHERE user_id=$uid");
+    db_exec($db, 'DELETE FROM notifications WHERE user_id=:id OR actor_id=:id', [':id' => $uid]);
+    db_exec($db, 'DELETE FROM follows WHERE follower_id=:id OR followee_id=:id', [':id' => $uid]);
+    db_exec($db, 'DELETE FROM liked_posts WHERE user_id=:id', [':id' => $uid]);
 
-    $res = $db->query("SELECT id FROM posts WHERE user_id=$uid AND parent_id IS NULL");
+    $res = db_query($db, 'SELECT id FROM posts WHERE user_id=:id AND parent_id IS NULL', [':id' => $uid]);
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
         delete_post_cascade($db, (int)$row['id']);
     }
     // Orphaned replies from this user (parent was someone else's post)
-    $db->exec("UPDATE posts SET parent_id=NULL WHERE user_id=$uid AND parent_id IS NOT NULL");
-    $db->exec("DELETE FROM liked_posts WHERE post_id IN (SELECT id FROM posts WHERE user_id=$uid)");
-    $db->exec("DELETE FROM notifications WHERE post_id IN (SELECT id FROM posts WHERE user_id=$uid)");
-    $db->exec("DELETE FROM posts WHERE user_id=$uid");
-    $db->exec("DELETE FROM users WHERE id=$uid");
+    db_exec($db, 'UPDATE posts SET parent_id=NULL WHERE user_id=:id AND parent_id IS NOT NULL', [':id' => $uid]);
+    db_exec($db, 'DELETE FROM liked_posts WHERE post_id IN (SELECT id FROM posts WHERE user_id=:id)', [':id' => $uid]);
+    db_exec($db, 'DELETE FROM notifications WHERE post_id IN (SELECT id FROM posts WHERE user_id=:id)', [':id' => $uid]);
+    db_exec($db, 'DELETE FROM posts WHERE user_id=:id', [':id' => $uid]);
+    db_exec($db, 'DELETE FROM users WHERE id=:id',      [':id' => $uid]);
 }
 
 // ── Routing ───────────────────────────────────────────────
@@ -336,7 +368,7 @@ $db = get_db();
 if ($method === 'GET' && $resource === 'auth' && $sub1 === 'me') {
     $uid = current_user_id();
     if (!$uid) json_ok(['user' => null]);
-    $u = $db->querySingle("SELECT * FROM users WHERE id=$uid", true);
+    $u = db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true);
     json_ok(['user' => $u ? format_user($u) : null]);
 }
 
@@ -353,26 +385,24 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
     if (strlen($password) < 6)
         json_error('Password must be at least 6 characters');
 
-    $esc_u = SQLite3::escapeString($username);
-    if ($db->querySingle("SELECT id FROM users WHERE username='$esc_u'"))
+    if (db_query_single($db, 'SELECT id FROM users WHERE username=:u', [':u' => $username]))
         json_error('Username already taken');
 
-    $esc_e = SQLite3::escapeString($email);
-    if ($db->querySingle("SELECT id FROM users WHERE email='$esc_e'"))
+    if (db_query_single($db, 'SELECT id FROM users WHERE email=:e', [':e' => $email]))
         json_error('Email already registered');
 
     $hash     = password_hash($password, PASSWORD_BCRYPT);
-    $is_admin = ($db->querySingle('SELECT COUNT(*) FROM users') === 0) ? 1 : 0;
+    $is_admin = (db_query_single($db, 'SELECT COUNT(*) FROM users') === 0) ? 1 : 0;
     $v_token  = bin2hex(random_bytes(32));
 
-    $stmt = $db->prepare('INSERT INTO users (username, email, password, is_admin, verification_token, created_at) VALUES (:u,:e,:p,:a,:v,:t)');
-    $stmt->bindValue(':u', $username, SQLITE3_TEXT);
-    $stmt->bindValue(':e', $email,    SQLITE3_TEXT);
-    $stmt->bindValue(':p', $hash,     SQLITE3_TEXT);
-    $stmt->bindValue(':a', $is_admin, SQLITE3_INTEGER);
-    $stmt->bindValue(':v', $v_token,  SQLITE3_TEXT);
-    $stmt->bindValue(':t', time(),    SQLITE3_INTEGER);
-    $stmt->execute();
+    db_exec($db, 'INSERT INTO users (username, email, password, is_admin, verification_token, created_at) VALUES (:u,:e,:p,:a,:v,:t)', [
+        ':u' => $username,
+        ':e' => $email,
+        ':p' => $hash,
+        ':a' => $is_admin,
+        ':v' => $v_token,
+        ':t' => time()
+    ]);
 
     $uid = $db->lastInsertRowID();
     $_SESSION['user_id'] = $uid;
@@ -387,7 +417,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
     );
     send_mail($email, "Verify your Magpie account", $text, $html);
 
-    json_ok(['user' => format_user($db->querySingle("SELECT * FROM users WHERE id=$uid", true))]);
+    json_ok(['user' => format_user(db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true))]);
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
@@ -395,8 +425,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
     $username = trim($input['username'] ?? '');
     $password = $input['password'] ?? '';
 
-    $esc  = SQLite3::escapeString($username);
-    $u    = $db->querySingle("SELECT * FROM users WHERE username='$esc' OR email='$esc'", true);
+    $u = db_query_single($db, 'SELECT * FROM users WHERE username=:u OR email=:u', [':u' => $username], true);
     if (!$u || !password_verify($password, $u['password']))
         json_error('Invalid username or password', 401);
     if ($u['disabled'])
@@ -416,11 +445,10 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'verify-email') {
     $token = trim($input['token'] ?? '');
     if (!$token) json_error('Token required');
 
-    $esc = SQLite3::escapeString($token);
-    $u = $db->querySingle("SELECT id FROM users WHERE verification_token='$esc'", true);
+    $u = db_query_single($db, 'SELECT id FROM users WHERE verification_token=:t', [':t' => $token], true);
     if (!$u) json_error('Invalid or expired token');
 
-    $db->exec("UPDATE users SET email_verified=1, verification_token=NULL WHERE id=" . $u['id']);
+    db_exec($db, 'UPDATE users SET email_verified=1, verification_token=NULL WHERE id=:id', [':id' => $u['id']]);
     json_ok(['ok' => true]);
 }
 
@@ -429,12 +457,15 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'forgot-password') {
     $email = trim($input['email'] ?? '');
     if (!$email) json_error('Email required');
 
-    $esc = SQLite3::escapeString($email);
-    $u = $db->querySingle("SELECT id, username FROM users WHERE email='$esc'", true);
+    $u = db_query_single($db, 'SELECT id, username FROM users WHERE email=:e', [':e' => $email], true);
     if ($u) {
         $token = bin2hex(random_bytes(32));
         $expires = time() + 3600; // 1 hour
-        $db->exec("UPDATE users SET reset_token='$token', reset_token_expires=$expires WHERE id=" . $u['id']);
+        db_exec($db, 'UPDATE users SET reset_token=:t, reset_token_expires=:e WHERE id=:id', [
+            ':t' => $token,
+            ':e' => $expires,
+            ':id' => $u['id']
+        ]);
         
         $url = "http://" . $_SERVER['HTTP_HOST'] . "/#reset=" . $token;
         $uname = $u['username'];
@@ -459,24 +490,29 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'reset-password') {
     if (!$token) json_error('Token required');
     if (strlen($password) < 6) json_error('Password must be at least 6 characters');
 
-    $esc = SQLite3::escapeString($token);
-    $u = $db->querySingle("SELECT id FROM users WHERE reset_token='$esc' AND reset_token_expires > " . time(), true);
+    $u = db_query_single($db, 'SELECT id FROM users WHERE reset_token=:t AND reset_token_expires > :now', [
+        ':t' => $token,
+        ':now' => time()
+    ], true);
     if (!$u) json_error('Invalid or expired token');
 
     $hash = password_hash($password, PASSWORD_BCRYPT);
-    $db->exec("UPDATE users SET password='$hash', reset_token=NULL, reset_token_expires=NULL WHERE id=" . $u['id']);
+    db_exec($db, 'UPDATE users SET password=:p, reset_token=NULL, reset_token_expires=NULL WHERE id=:id', [
+        ':p' => $hash,
+        ':id' => $u['id']
+    ]);
     json_ok(['ok' => true]);
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'resend-verification') {
     $uid = require_auth();
-    $u = $db->querySingle("SELECT * FROM users WHERE id=$uid", true);
+    $u = db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true);
     if ($u['email_verified']) json_error('Email already verified');
     
     $v_token = $u['verification_token'];
     if (!$v_token) {
         $v_token = bin2hex(random_bytes(32));
-        $db->exec("UPDATE users SET verification_token='$v_token' WHERE id=$uid");
+        db_exec($db, 'UPDATE users SET verification_token=:v WHERE id=:id', [':v' => $v_token, ':id' => $uid]);
     }
 
     $url = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
@@ -517,7 +553,7 @@ if ($method === 'POST' && $resource === 'users' && $sub1 === 'me' && $sub2 === '
 
     if (!is_dir(UPLOADS_DIR)) mkdir(UPLOADS_DIR, 0755, true);
 
-    $old = $db->querySingle("SELECT avatar FROM users WHERE id=$uid", true);
+    $old = db_query_single($db, 'SELECT avatar FROM users WHERE id=:id', [':id' => $uid], true);
     if ($old && $old['avatar']) {
         $p = UPLOADS_DIR . $old['avatar'];
         if (file_exists($p)) unlink($p);
@@ -526,9 +562,8 @@ if ($method === 'POST' && $resource === 'users' && $sub1 === 'me' && $sub2 === '
     if (!move_uploaded_file($file['tmp_name'], UPLOADS_DIR . $filename))
         json_error('Failed to save file');
 
-    $esc = SQLite3::escapeString($filename);
-    $db->exec("UPDATE users SET avatar='$esc' WHERE id=$uid");
-    json_ok(['user' => format_user($db->querySingle("SELECT * FROM users WHERE id=$uid", true))]);
+    db_exec($db, 'UPDATE users SET avatar=:v WHERE id=:id', [':v' => $filename, ':id' => $uid]);
+    json_ok(['user' => format_user(db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true))]);
 }
 
 // PUT /users/me — update display_name, email, and bio
@@ -545,19 +580,20 @@ if ($method === 'PUT' && $resource === 'users' && $sub1 === 'me') {
     if (!$email)                json_error('Email address is required');
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('Invalid email address');
 
-    $dn_sql    = $dn  ? "'" . SQLite3::escapeString($dn)  . "'" : 'NULL';
-    $bio_sql   = $bio ? "'" . SQLite3::escapeString($bio) . "'" : 'NULL';
-    $esc_email = SQLite3::escapeString($email);
-
-    $current = $db->querySingle("SELECT email FROM users WHERE id=$uid", true);
+    $current = db_query_single($db, 'SELECT email FROM users WHERE id=:id', [':id' => $uid], true);
     $email_changed = strtolower($email) !== strtolower($current['email']);
     if ($email_changed) {
-        if ($db->querySingle("SELECT id FROM users WHERE email='$esc_email' AND id != $uid"))
+        if (db_query_single($db, 'SELECT id FROM users WHERE email=:e AND id != :id', [':e' => $email, ':id' => $uid]))
             json_error('Email address is already in use');
         $v_token = bin2hex(random_bytes(32));
-        $esc_tok = SQLite3::escapeString($v_token);
-        $db->exec("UPDATE users SET display_name=$dn_sql, bio=$bio_sql, email='$esc_email', email_verified=0, verification_token='$esc_tok' WHERE id=$uid");
-        $uname = $db->querySingle("SELECT username FROM users WHERE id=$uid");
+        db_exec($db, 'UPDATE users SET display_name=:dn, bio=:bio, email=:e, email_verified=0, verification_token=:v WHERE id=:id', [
+            ':dn' => $dn ?: null,
+            ':bio' => $bio ?: null,
+            ':e' => $email,
+            ':v' => $v_token,
+            ':id' => $uid
+        ]);
+        $uname = db_query_single($db, 'SELECT username FROM users WHERE id=:id', [':id' => $uid]);
         $url   = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
         $text  = "Hello $uname,\n\nPlease verify your new Magpie email address by visiting the link below:\n\n$url\n\nIf you did not request this change, please contact support.";
         $html  = mail_html_wrap(
@@ -568,10 +604,14 @@ if ($method === 'PUT' && $resource === 'users' && $sub1 === 'me') {
         );
         send_mail($email, "Verify your new Magpie email address", $text, $html);
     } else {
-        $db->exec("UPDATE users SET display_name=$dn_sql, bio=$bio_sql WHERE id=$uid");
+        db_exec($db, 'UPDATE users SET display_name=:dn, bio=:bio WHERE id=:id', [
+            ':dn' => $dn ?: null,
+            ':bio' => $bio ?: null,
+            ':id' => $uid
+        ]);
     }
 
-    json_ok(['user' => format_user($db->querySingle("SELECT * FROM users WHERE id=$uid", true))]);
+    json_ok(['user' => format_user(db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true))]);
 }
 
 // DELETE /users/me — delete own account
@@ -591,24 +631,26 @@ if ($method === 'GET' && $resource === 'users' && !$sub1) {
     $q   = trim($_GET['q'] ?? '');
     $following_only = (bool)($_GET['following'] ?? false);
 
-    $where = "WHERE u.id != $uid AND u.disabled = 0";
+    $where = "WHERE u.id != :uid AND u.disabled = 0";
+    $params = [':uid' => $uid];
+
     if ($q !== '') {
-        $esc = SQLite3::escapeString($q);
-        $where .= " AND (u.username LIKE '%$esc%' OR u.display_name LIKE '%$esc%')";
+        $where .= " AND (u.username LIKE :q OR u.display_name LIKE :q)";
+        $params[':q'] = "%$q%";
     }
     if ($following_only) {
-        $where .= " AND u.id IN (SELECT followee_id FROM follows WHERE follower_id=$uid)";
+        $where .= " AND u.id IN (SELECT followee_id FROM follows WHERE follower_id=:uid)";
     }
 
-    $res = $db->query("
+    $res = db_query($db, "
         SELECT u.*,
                CASE WHEN f.follower_id IS NOT NULL THEN 1 ELSE 0 END AS following
         FROM   users u
-        LEFT JOIN follows f ON f.follower_id=$uid AND f.followee_id=u.id
+        LEFT JOIN follows f ON f.follower_id=:uid AND f.followee_id=u.id
         $where
         ORDER BY u.username ASC
         LIMIT 50
-    ");
+    ", $params);
 
     $users = [];
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
@@ -644,12 +686,12 @@ if ($method === 'GET' && $resource === 'posts' && $id && $sub2 === 'thread') {
     // Get direct replies
     $cols  = post_select_cols('p', $uid);
     $joins = post_join_sql('p', $uid);
-    $res   = $db->query("
+    $res   = db_query($db, "
         SELECT $cols FROM posts p $joins
-        WHERE p.parent_id=$id
+        WHERE p.parent_id=:id
         ORDER BY p.created_at ASC
         LIMIT 100
-    ");
+    ", [':id' => $id]);
     $replies = [];
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
         $replies[] = format_post_row($row, $uid);
@@ -666,41 +708,42 @@ if ($method === 'GET' && $resource === 'posts') {
 
     $feed       = $_GET['feed'] ?? '';
     $liked_join = '';
+    $params     = [':lim' => $limit, ':off' => $offset];
     $conditions = [];
 
-    if ($uid && $feed === 'following') {
-        $conditions[] = "(p.user_id IN (SELECT followee_id FROM follows WHERE follower_id=$uid) OR p.user_id=$uid)";
-    } elseif ($uid && $feed === 'liked') {
-        $liked_join   = "JOIN liked_posts lp2 ON lp2.post_id = p.id AND lp2.user_id = $uid";
+    if ($uid) {
+        $params[':uid'] = $uid;
+        if ($feed === 'following') {
+            $conditions[] = "(p.user_id IN (SELECT followee_id FROM follows WHERE follower_id=:uid) OR p.user_id=:uid)";
+        } elseif ($feed === 'liked') {
+            $liked_join = "JOIN liked_posts lp2 ON lp2.post_id = p.id AND lp2.user_id = :uid";
+        }
     }
 
     $where_clause = $conditions ? 'WHERE ' . implode(' AND ', $conditions) : '';
     $cols         = post_select_cols('p', $uid);
     $joins        = post_join_sql('p', $uid);
 
-    $stmt = $db->prepare("
+    $res = db_query($db, "
         SELECT $cols FROM posts p
         $liked_join $joins
         $where_clause
         ORDER BY p.created_at DESC
         LIMIT :lim OFFSET :off
-    ");
-    $stmt->bindValue(':lim', $limit,  SQLITE3_INTEGER);
-    $stmt->bindValue(':off', $offset, SQLITE3_INTEGER);
-    $result = $stmt->execute();
+    ", $params);
 
     $posts = [];
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
         $posts[] = format_post_row($row, $uid);
     }
 
-    $total = (int)$db->querySingle("SELECT COUNT(*) FROM posts p $liked_join $where_clause");
+    $total = (int)db_query_single($db, "SELECT COUNT(*) FROM posts p $liked_join $where_clause", $params);
     json_ok(['posts' => $posts, 'total' => $total, 'page' => $page, 'pages' => (int)ceil($total / $limit)]);
 }
 
 if ($method === 'POST' && $resource === 'posts' && !$id) {
     $uid = require_auth();
-    $u   = $db->querySingle("SELECT username, disabled, email_verified FROM users WHERE id=$uid", true);
+    $u   = db_query_single($db, 'SELECT username, disabled, email_verified FROM users WHERE id=:id', [':id' => $uid], true);
     if ($u['disabled']) json_error('Your account has been disabled', 403);
     if (!$u['email_verified']) json_error('Please verify your email address to post', 403);
 
@@ -713,28 +756,22 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
     if (mb_strlen($body) > MAX_POST_LENGTH) json_error('Post exceeds ' . MAX_POST_LENGTH . ' character limit');
 
     if ($parent_id) {
-        $parent = $db->querySingle("SELECT id, user_id FROM posts WHERE id=$parent_id", true);
+        $parent = db_query_single($db, 'SELECT id, user_id FROM posts WHERE id=:id', [':id' => $parent_id], true);
         if (!$parent) json_error('Parent post not found', 404);
     }
     if ($quote_id) {
-        $quoted = $db->querySingle("SELECT id, user_id FROM posts WHERE id=$quote_id", true);
+        $quoted = db_query_single($db, 'SELECT id, user_id FROM posts WHERE id=:id', [':id' => $quote_id], true);
         if (!$quoted) json_error('Quoted post not found', 404);
     }
 
-    $pid_sql = $parent_id ? $parent_id : 'NULL';
-    $qid_sql = $quote_id  ? $quote_id  : 'NULL';
-
-    $stmt = $db->prepare('
-        INSERT INTO posts (user_id, username, body, parent_id, quote_id, created_at)
-        VALUES (:u,:n,:b,:p,:q,:t)
-    ');
-    $stmt->bindValue(':u', $uid,           SQLITE3_INTEGER);
-    $stmt->bindValue(':n', $u['username'], SQLITE3_TEXT);
-    $stmt->bindValue(':b', $body,          SQLITE3_TEXT);
-    $stmt->bindValue(':p', $parent_id,     $parent_id ? SQLITE3_INTEGER : SQLITE3_NULL);
-    $stmt->bindValue(':q', $quote_id,      $quote_id  ? SQLITE3_INTEGER : SQLITE3_NULL);
-    $stmt->bindValue(':t', time(),         SQLITE3_INTEGER);
-    $stmt->execute();
+    db_exec($db, 'INSERT INTO posts (user_id, username, body, parent_id, quote_id, created_at) VALUES (:u,:n,:b,:p,:q,:t)', [
+        ':u' => $uid,
+        ':n' => $u['username'],
+        ':b' => $body,
+        ':p' => $parent_id,
+        ':q' => $quote_id,
+        ':t' => time()
+    ]);
 
     $nid = $db->lastInsertRowID();
 
@@ -742,13 +779,13 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
     if ($parent_id && isset($parent)) {
         $target_uid = (int)$parent['user_id'];
         if ($target_uid !== $uid) {
-            $stmt2 = $db->prepare('INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,:t,:p,:ts)');
-            $stmt2->bindValue(':u',  $target_uid,  SQLITE3_INTEGER);
-            $stmt2->bindValue(':a',  $uid,          SQLITE3_INTEGER);
-            $stmt2->bindValue(':t',  'reply',       SQLITE3_TEXT);
-            $stmt2->bindValue(':p',  $nid,          SQLITE3_INTEGER);
-            $stmt2->bindValue(':ts', time(),         SQLITE3_INTEGER);
-            $stmt2->execute();
+            db_exec($db, 'INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,:t,:p,:ts)', [
+                ':u'  => $target_uid,
+                ':a'  => $uid,
+                ':t'  => 'reply',
+                ':p'  => $nid,
+                ':ts' => time()
+            ]);
         }
     }
 
@@ -756,13 +793,13 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
     if ($quote_id && isset($quoted)) {
         $target_uid = (int)$quoted['user_id'];
         if ($target_uid !== $uid) {
-            $stmt3 = $db->prepare('INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,:t,:p,:ts)');
-            $stmt3->bindValue(':u',  $target_uid,  SQLITE3_INTEGER);
-            $stmt3->bindValue(':a',  $uid,          SQLITE3_INTEGER);
-            $stmt3->bindValue(':t',  'quote',       SQLITE3_TEXT);
-            $stmt3->bindValue(':p',  $nid,          SQLITE3_INTEGER);
-            $stmt3->bindValue(':ts', time(),         SQLITE3_INTEGER);
-            $stmt3->execute();
+            db_exec($db, 'INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,:t,:p,:ts)', [
+                ':u'  => $target_uid,
+                ':a'  => $uid,
+                ':t'  => 'quote',
+                ':p'  => $nid,
+                ':ts' => time()
+            ]);
         }
     }
 
@@ -772,26 +809,17 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
 
 if ($method === 'POST' && $resource === 'posts' && $id && $sub2 === 'like') {
     $uid  = require_auth();
-    $post = $db->querySingle("SELECT id FROM posts WHERE id=$id", true);
+    $post = db_query_single($db, 'SELECT id FROM posts WHERE id=:id', [':id' => $id], true);
     if (!$post) json_error('Post not found', 404);
 
-    $ls = $db->prepare('SELECT 1 FROM liked_posts WHERE post_id=:p AND user_id=:u');
-    $ls->bindValue(':p', $id,  SQLITE3_INTEGER);
-    $ls->bindValue(':u', $uid, SQLITE3_INTEGER);
-    $already = (bool)$ls->execute()->fetchArray();
+    $already = (bool)db_query_single($db, 'SELECT 1 FROM liked_posts WHERE post_id=:p AND user_id=:u', [':p' => $id, ':u' => $uid]);
 
     if ($already) {
-        $s = $db->prepare('DELETE FROM liked_posts WHERE post_id=:p AND user_id=:u');
-        $s->bindValue(':p', $id,  SQLITE3_INTEGER);
-        $s->bindValue(':u', $uid, SQLITE3_INTEGER);
-        $s->execute();
-        $db->exec("UPDATE posts SET likes=MAX(0,likes-1) WHERE id=$id");
+        db_exec($db, 'DELETE FROM liked_posts WHERE post_id=:p AND user_id=:u', [':p' => $id, ':u' => $uid]);
+        db_exec($db, 'UPDATE posts SET likes=MAX(0,likes-1) WHERE id=:id', [':id' => $id]);
     } else {
-        $s = $db->prepare('INSERT INTO liked_posts (post_id,user_id) VALUES (:p,:u)');
-        $s->bindValue(':p', $id,  SQLITE3_INTEGER);
-        $s->bindValue(':u', $uid, SQLITE3_INTEGER);
-        $s->execute();
-        $db->exec("UPDATE posts SET likes=likes+1 WHERE id=$id");
+        db_exec($db, 'INSERT INTO liked_posts (post_id,user_id) VALUES (:p,:u)', [':p' => $id, ':u' => $uid]);
+        db_exec($db, 'UPDATE posts SET likes=likes+1 WHERE id=:id', [':id' => $id]);
     }
 
     json_ok(fetch_post($db, $id, $uid));
@@ -799,7 +827,7 @@ if ($method === 'POST' && $resource === 'posts' && $id && $sub2 === 'like') {
 
 if ($method === 'DELETE' && $resource === 'posts' && $id && $sub1 !== 'users') {
     $uid  = require_auth();
-    $post = $db->querySingle("SELECT user_id FROM posts WHERE id=$id", true);
+    $post = db_query_single($db, 'SELECT user_id FROM posts WHERE id=:id', [':id' => $id], true);
     if (!$post)                         json_error('Post not found', 404);
     if ((int)$post['user_id'] !== $uid) json_error('Forbidden', 403);
 
@@ -814,7 +842,7 @@ if ($method === 'DELETE' && $resource === 'posts' && $id && $sub1 !== 'users') {
 if ($method === 'GET' && $resource === 'notifications') {
     $uid = require_auth();
 
-    $res = $db->query("
+    $res = db_query($db, "
         SELECT n.*,
                a.username     AS actor_username,
                a.display_name AS actor_display_name,
@@ -825,10 +853,10 @@ if ($method === 'GET' && $resource === 'notifications') {
         JOIN   users a ON a.id = n.actor_id
         LEFT JOIN posts p  ON p.id  = n.post_id
         LEFT JOIN posts pp ON pp.id = p.parent_id
-        WHERE  n.user_id = $uid
+        WHERE  n.user_id = :uid
         ORDER  BY n.created_at DESC
         LIMIT  50
-    ");
+    ", [':uid' => $uid]);
 
     $notifs = [];
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
@@ -848,13 +876,13 @@ if ($method === 'GET' && $resource === 'notifications') {
         ];
     }
 
-    $unread = (int)$db->querySingle("SELECT COUNT(*) FROM notifications WHERE user_id=$uid AND read=0");
+    $unread = (int)db_query_single($db, 'SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read=0', [':uid' => $uid]);
     json_ok(['notifications' => $notifs, 'unread' => $unread]);
 }
 
 if ($method === 'POST' && $resource === 'notifications' && $sub1 === 'read') {
     $uid = require_auth();
-    $db->exec("UPDATE notifications SET read=1 WHERE user_id=$uid");
+    db_exec($db, 'UPDATE notifications SET read=1 WHERE user_id=:uid', [':uid' => $uid]);
     json_ok(['ok' => true]);
 }
 
@@ -864,7 +892,7 @@ if ($method === 'POST' && $resource === 'notifications' && $sub1 === 'read') {
 
 if ($method === 'GET' && $resource === 'admin' && $sub1 === 'users') {
     require_admin($db);
-    $res   = $db->query('
+    $res = db_query($db, '
         SELECT u.*, COUNT(p.id) AS post_count
         FROM   users u LEFT JOIN posts p ON p.user_id=u.id
         GROUP  BY u.id ORDER BY u.created_at ASC
@@ -882,38 +910,45 @@ if ($method === 'PATCH' && $resource === 'admin' && $sub1 === 'users' && $target
     $admin_uid = require_admin($db);
     $tid       = $target_id;
 
-    if (!$db->querySingle("SELECT id FROM users WHERE id=$tid", true))
+    if (!db_query_single($db, 'SELECT id FROM users WHERE id=:id', [':id' => $tid], true))
         json_error('User not found', 404);
 
     $input  = json_decode(file_get_contents('php://input'), true);
     $fields = [];
+    $params = [':tid' => $tid];
 
     if (array_key_exists('display_name', $input)) {
         $v = trim($input['display_name'] ?? '');
         if (mb_strlen($v) > 50) json_error('Display name too long');
-        $fields[] = 'display_name=' . ($v ? "'" . SQLite3::escapeString($v) . "'" : 'NULL');
+        $fields[] = 'display_name=:dn';
+        $params[':dn'] = $v ?: null;
     }
     if (array_key_exists('bio', $input)) {
         $v = trim($input['bio'] ?? '');
         if (mb_strlen($v) > 160) json_error('Bio too long');
-        $fields[] = "bio='" . SQLite3::escapeString($v) . "'";
+        $fields[] = 'bio=:bio';
+        $params[':bio'] = $v;
     }
     if (array_key_exists('disabled', $input)) {
         if ($tid === $admin_uid && $input['disabled']) json_error('Cannot disable your own account');
-        $fields[] = 'disabled=' . ($input['disabled'] ? 1 : 0);
+        $fields[] = 'disabled=:disabled';
+        $params[':disabled'] = $input['disabled'] ? 1 : 0;
     }
     if (array_key_exists('is_admin', $input)) {
         if ($tid === $admin_uid && !$input['is_admin']) json_error('Cannot remove your own admin status');
-        $fields[] = 'is_admin=' . ($input['is_admin'] ? 1 : 0);
+        $fields[] = 'is_admin=:is_admin';
+        $params[':is_admin'] = $input['is_admin'] ? 1 : 0;
     }
 
-    if ($fields) $db->exec("UPDATE users SET " . implode(',', $fields) . " WHERE id=$tid");
+    if ($fields) {
+        db_exec($db, 'UPDATE users SET ' . implode(',', $fields) . ' WHERE id=:tid', $params);
+    }
 
-    $row = $db->querySingle("
+    $row = db_query_single($db, "
         SELECT u.*, COUNT(p.id) AS post_count
         FROM users u LEFT JOIN posts p ON p.user_id=u.id
-        WHERE u.id=$tid GROUP BY u.id
-    ", true);
+        WHERE u.id=:id GROUP BY u.id
+    ", [':id' => $tid], true);
     $u = format_user($row);
     $u['post_count'] = (int)$row['post_count'];
     json_ok(['user' => $u]);
@@ -924,7 +959,7 @@ if ($method === 'DELETE' && $resource === 'admin' && $sub1 === 'users' && $targe
     $tid       = $target_id;
 
     if ($tid === $admin_uid) json_error('Cannot delete your own account from the admin panel');
-    if (!$db->querySingle("SELECT id FROM users WHERE id=$tid", true))
+    if (!db_query_single($db, 'SELECT id FROM users WHERE id=:id', [':id' => $tid], true))
         json_error('User not found', 404);
 
     delete_user_data($db, $tid);
@@ -938,40 +973,39 @@ if ($method === 'DELETE' && $resource === 'admin' && $sub1 === 'users' && $targe
 // POST /users/:username/follow — toggle follow
 if ($method === 'POST' && $resource === 'users' && $sub1 && $sub1 !== 'me' && !is_numeric($sub1) && $sub2 === 'follow') {
     $uid = require_auth();
-    $esc = SQLite3::escapeString($sub1);
-    $target = $db->querySingle("SELECT id FROM users WHERE username='$esc'", true);
+    $target = db_query_single($db, 'SELECT id FROM users WHERE username=:u', [':u' => $sub1], true);
     if (!$target) json_error('User not found', 404);
     $tid = (int)$target['id'];
     if ($tid === $uid) json_error('Cannot follow yourself');
 
-    $s = $db->prepare('SELECT 1 FROM follows WHERE follower_id=:f AND followee_id=:e');
-    $s->bindValue(':f', $uid, SQLITE3_INTEGER);
-    $s->bindValue(':e', $tid, SQLITE3_INTEGER);
-    $already = (bool)$s->execute()->fetchArray();
+    $already = (bool)db_query_single($db, 'SELECT 1 FROM follows WHERE follower_id=:f AND followee_id=:e', [
+        ':f' => $uid,
+        ':e' => $tid
+    ]);
 
     if ($already) {
-        $s = $db->prepare('DELETE FROM follows WHERE follower_id=:f AND followee_id=:e');
-        $s->bindValue(':f', $uid, SQLITE3_INTEGER);
-        $s->bindValue(':e', $tid, SQLITE3_INTEGER);
-        $s->execute();
+        db_exec($db, 'DELETE FROM follows WHERE follower_id=:f AND followee_id=:e', [
+            ':f' => $uid,
+            ':e' => $tid
+        ]);
         $following = false;
     } else {
-        $s = $db->prepare('INSERT INTO follows (follower_id, followee_id) VALUES (:f,:e)');
-        $s->bindValue(':f', $uid, SQLITE3_INTEGER);
-        $s->bindValue(':e', $tid, SQLITE3_INTEGER);
-        $s->execute();
+        db_exec($db, 'INSERT INTO follows (follower_id, followee_id) VALUES (:f,:e)', [
+            ':f' => $uid,
+            ':e' => $tid
+        ]);
         $following = true;
 
         // Create follow notification
-        $sn = $db->prepare('INSERT INTO notifications (user_id,actor_id,type,created_at) VALUES (:u,:a,:t,:ts)');
-        $sn->bindValue(':u',  $tid,     SQLITE3_INTEGER);
-        $sn->bindValue(':a',  $uid,     SQLITE3_INTEGER);
-        $sn->bindValue(':t',  'follow', SQLITE3_TEXT);
-        $sn->bindValue(':ts', time(),   SQLITE3_INTEGER);
-        $sn->execute();
+        db_exec($db, 'INSERT INTO notifications (user_id,actor_id,type,created_at) VALUES (:u,:a,:t,:ts)', [
+            ':u'  => $tid,
+            ':a'  => $uid,
+            ':t'  => 'follow',
+            ':ts' => time()
+        ]);
     }
 
-    $follower_count = (int)$db->querySingle("SELECT COUNT(*) FROM follows WHERE followee_id=$tid");
+    $follower_count = (int)db_query_single($db, 'SELECT COUNT(*) FROM follows WHERE followee_id=:tid', [':tid' => $tid]);
     json_ok(['following' => $following, 'follower_count' => $follower_count]);
 }
 
