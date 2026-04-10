@@ -136,8 +136,13 @@
         <div id="compose-modal-label" class="reply-label" style="display:none"></div>
         <textarea id="compose-modal-input" placeholder="Post your reply" rows="3"></textarea>
         <div id="compose-modal-quote-wrap" style="display:none"></div>
+        <div class="compose-images-preview hidden" id="compose-modal-image-preview"></div>
         <div class="compose-footer">
-          <div class="char-ring-wrap">
+          <button class="compose-attach-btn" id="compose-modal-attach-btn" title="Add images">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </button>
+          <input type="file" id="compose-modal-image-file" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display:none">
+          <div class="char-ring-wrap" style="margin-left:auto">
             <svg class="char-ring" id="compose-modal-ring" viewBox="0 0 22 22">
               <circle class="track" cx="11" cy="11" r="9"/>
               <circle class="fill"  cx="11" cy="11" r="9" stroke-dashoffset="0" id="compose-modal-ring-fill"/>
@@ -254,15 +259,23 @@
           <div class="avatar" id="compose-avatar">?</div>
           <div class="compose-body">
             <textarea id="post-input" placeholder="What's happening?" rows="3"></textarea>
+            <div class="compose-images-preview hidden" id="compose-image-preview"></div>
             <div class="compose-footer">
-              <div class="char-ring-wrap">
-                <svg class="char-ring" id="char-ring" viewBox="0 0 22 22">
-                  <circle class="track" cx="11" cy="11" r="9"/>
-                  <circle class="fill"  cx="11" cy="11" r="9" stroke-dashoffset="0" id="char-ring-fill"/>
-                </svg>
-                <span class="char-remaining" id="char-remaining"></span>
+              <button class="compose-attach-btn" id="compose-attach-btn" title="Add images">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </button>
+              <input type="file" id="compose-image-file" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display:none">
+              <div class="compose-footer-right">
+                <div class="char-ring-wrap" id="char-ring-wrap" style="display:none">
+                  <svg class="char-ring" id="char-ring" viewBox="0 0 22 22">
+                    <circle class="track" cx="11" cy="11" r="9"/>
+                    <circle class="fill"  cx="11" cy="11" r="9" stroke-dashoffset="0" id="char-ring-fill"/>
+                  </svg>
+                  <span class="char-remaining" id="char-remaining"></span>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="compose-cancel-btn" style="display:none">Cancel</button>
+                <button class="btn btn-primary" id="submit-btn" disabled>Post</button>
               </div>
-              <button class="btn btn-primary" id="submit-btn" disabled>Post</button>
             </div>
           </div>
         </div>
@@ -406,6 +419,16 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- ── Lightbox ──────────────────────────────────────────── -->
+<div class="lightbox hidden" id="lightbox">
+  <button class="lightbox-close" id="lightbox-close" title="Close">&times;</button>
+  <button class="lightbox-prev" id="lightbox-prev" title="Previous">&#8249;</button>
+  <img class="lightbox-img" id="lightbox-img" src="" alt="">
+  <button class="lightbox-next" id="lightbox-next" title="Next">&#8250;</button>
+  <span class="lightbox-counter" id="lightbox-counter"></span>
+</div>
+
 <script src="js/app.js"></script>
 </body>
 </html>

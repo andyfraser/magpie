@@ -38,10 +38,12 @@ const resendVerifyBtn = document.getElementById('resend-verify-btn');
 
 const composeEl      = document.getElementById('compose');
 const postInput      = document.getElementById('post-input');
+const charRingWrap   = document.getElementById('char-ring-wrap');
 const charRing       = document.getElementById('char-ring');
 const charRingFill   = document.getElementById('char-ring-fill');
 const charRemaining  = document.getElementById('char-remaining');
 const submitBtn      = document.getElementById('submit-btn');
+const cancelBtn      = document.getElementById('compose-cancel-btn');
 const composeAvatar  = document.getElementById('compose-avatar');
 
 const sidebarUser    = document.getElementById('sidebar-user');
@@ -101,17 +103,33 @@ const threadContent  = document.getElementById('thread-content');
 const threadClose    = document.getElementById('thread-close');
 
 // Compose modal (reply / quote)
-const composeModal       = document.getElementById('compose-modal');
-const composeModalCtx    = document.getElementById('compose-modal-context');
-const composeModalAvatar = document.getElementById('compose-modal-avatar');
-const composeModalLabel  = document.getElementById('compose-modal-label');
-const composeModalInput  = document.getElementById('compose-modal-input');
-const composeModalQuote  = document.getElementById('compose-modal-quote-wrap');
-const composeModalRing   = document.getElementById('compose-modal-ring');
-const composeModalFill   = document.getElementById('compose-modal-ring-fill');
-const composeModalLeft   = document.getElementById('compose-modal-remaining');
-const composeModalCancel = document.getElementById('compose-modal-cancel');
-const composeModalSubmit = document.getElementById('compose-modal-submit');
+const composeModal            = document.getElementById('compose-modal');
+const composeModalCtx         = document.getElementById('compose-modal-context');
+const composeModalAvatar      = document.getElementById('compose-modal-avatar');
+const composeModalLabel       = document.getElementById('compose-modal-label');
+const composeModalInput       = document.getElementById('compose-modal-input');
+const composeModalQuote       = document.getElementById('compose-modal-quote-wrap');
+const composeModalRing        = document.getElementById('compose-modal-ring');
+const composeModalFill        = document.getElementById('compose-modal-ring-fill');
+const composeModalLeft        = document.getElementById('compose-modal-remaining');
+const composeModalCancel      = document.getElementById('compose-modal-cancel');
+const composeModalSubmit      = document.getElementById('compose-modal-submit');
+const composeModalAttachBtn   = document.getElementById('compose-modal-attach-btn');
+const composeModalImageFile   = document.getElementById('compose-modal-image-file');
+const composeModalImagePreview= document.getElementById('compose-modal-image-preview');
+
+// Home compose image
+const composeAttachBtn   = document.getElementById('compose-attach-btn');
+const composeImageFile   = document.getElementById('compose-image-file');
+const composeImagePreview= document.getElementById('compose-image-preview');
+
+// Lightbox
+const lightboxEl      = document.getElementById('lightbox');
+const lightboxImg     = document.getElementById('lightbox-img');
+const lightboxClose   = document.getElementById('lightbox-close');
+const lightboxPrev    = document.getElementById('lightbox-prev');
+const lightboxNext    = document.getElementById('lightbox-next');
+const lightboxCounter = document.getElementById('lightbox-counter');
 
 // ── State ─────────────────────────────────────────────────
 let currentUser  = null;
@@ -125,6 +143,14 @@ let feedRefreshTimer = null;
 let composeMode     = null; // 'reply' | 'quote'
 let composeTargetId = null; // post id
 let composeIsSubmitting = false;
+
+// Image state
+let postImageFiles        = []; // selected Files for home compose (max 4)
+let composeModalImageFiles = []; // selected Files for compose modal (max 4)
+
+// Lightbox state
+let lightboxImages = [];
+let lightboxIndex  = 0;
 
 // ── Boot ──────────────────────────────────────────────────
 (async () => {
@@ -492,7 +518,10 @@ function updateCharCount() {
   const left = MAX_CHARS - len;
   const pct  = Math.min(len / MAX_CHARS, 1);
 
-  submitBtn.disabled = len === 0 || left < 0 || isSubmitting;
+  const hasContent = len > 0 || postImageFiles.length > 0;
+  submitBtn.disabled        = !hasContent || left < 0 || isSubmitting;
+  cancelBtn.style.display   = hasContent ? '' : 'none';
+  charRingWrap.style.display = hasContent ? '' : 'none';
 
   charRingFill.setAttribute('stroke-dashoffset', CIRC * (1 - pct));
   charRing.setAttribute('class', 'char-ring' + (left < 0 ? ' danger' : left < 20 ? ' warn' : ''));
@@ -506,17 +535,17 @@ updateCharCount();
 async function submitPost() {
   if (isSubmitting || !currentUser) return;
   const body = postInput.value.trim();
-  if (!body) return;
+  if (!body && postImageFiles.length === 0) return;
 
   isSubmitting = submitBtn.disabled = true;
   try {
-    const post = await apiFetch('posts', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ body }),
-    });
+    const fd = new FormData();
+    fd.append('body', body);
+    postImageFiles.forEach(f => fd.append('images[]', f));
+
+    await apiFetch('posts', { method: 'POST', body: fd });
     postInput.value = '';
-    updateCharCount();
+    clearComposeImages(postImageFiles, composeImagePreview, updateCharCount);
     await loadPosts(1, true);
   } catch (e) {
     showToast(e.message, true);
@@ -525,6 +554,19 @@ async function submitPost() {
     updateCharCount();
   }
 }
+
+cancelBtn.addEventListener('click', () => {
+  postInput.value = '';
+  clearComposeImages(postImageFiles, composeImagePreview, updateCharCount);
+  postInput.focus();
+});
+
+// ── Compose image attach (home) ───────────────────────────
+composeAttachBtn.addEventListener('click', () => composeImageFile.click());
+composeImageFile.addEventListener('change', () => {
+  addFilesToCompose(Array.from(composeImageFile.files), postImageFiles, composeImagePreview, updateCharCount);
+  composeImageFile.value = '';
+});
 
 // ── Feed ──────────────────────────────────────────────────
 function scheduleFeedRefresh() {
@@ -580,6 +622,8 @@ function renderPost(post, opts = {}) {
   const quoteCard = post.quote ? renderQuoteCard(post.quote) : '';
 
   const replyCountLabel = post.reply_count > 0 ? post.reply_count : '';
+  const editedLabel     = post.edited_at ? `<span class="post-edited" title="Edited ${new Date(post.edited_at * 1000).toLocaleString()}">· edited</span>` : '';
+  const imageHtml       = renderPhotoGrid(post.image_urls);
 
   div.innerHTML = `
     ${postAvatarHtml(post)}
@@ -589,9 +633,11 @@ function renderPost(post, opts = {}) {
         <span class="post-handle">@${esc(post.username)}</span>
         <span class="post-sep">·</span>
         <span class="post-time" title="${new Date(post.created_at * 1000).toLocaleString()}">${timeAgo(post.created_at)}</span>
+        ${editedLabel}
       </div>
       ${replyingTo}
       <div class="post-body post-body-clickable">${esc(post.body)}</div>
+      ${imageHtml}
       ${quoteCard}
       <div class="post-actions">
         <button class="action-btn reply-btn" data-id="${post.id}" title="Reply">
@@ -606,13 +652,22 @@ function renderPost(post, opts = {}) {
           <span class="like-count">${post.likes > 0 ? post.likes : ''}</span>
         </button>
         ${!post.own && currentUser ? `<button class="action-btn follow-btn ${post.following ? 'following' : ''}" data-username="${esc(post.username)}" title="${post.following ? 'Unfollow' : 'Follow'} @${esc(post.username)}">${followSvg(post.following)}</button>` : ''}
-        ${post.own ? `<button class="action-btn delete-btn" data-id="${post.id}">${trashSvg()}</button>` : ''}
+        ${post.own ? `<button class="action-btn edit-btn" data-id="${post.id}" title="Edit">${editSvg()}</button>` : ''}
+        ${post.own ? `<button class="action-btn delete-btn" data-id="${post.id}" title="Delete">${trashSvg()}</button>` : ''}
       </div>
     </div>`;
 
   // Click post body/meta to open thread (not action buttons)
   div.querySelector('.post-body-clickable').addEventListener('click', () => openThread(post.id));
   div.querySelector('.post-meta').addEventListener('click', () => openThread(post.id));
+
+  // Photo grid lightbox
+  div.querySelectorAll('.photo-grid-item').forEach((item, idx) => {
+    item.addEventListener('click', e => {
+      e.stopPropagation();
+      openLightbox(post.image_urls, idx);
+    });
+  });
 
   div.querySelector('.reply-btn').addEventListener('click', e => {
     e.stopPropagation();
@@ -637,12 +692,159 @@ function renderPost(post, opts = {}) {
     toggleFollow(post.username);
   });
 
+  div.querySelector('.edit-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    startEditPost(post, div);
+  });
+
   div.querySelector('.delete-btn')?.addEventListener('click', e => {
     e.stopPropagation();
     deletePost(post.id, div);
   });
 
   return div;
+}
+
+function startEditPost(post, postEl) {
+  const bodyEl    = postEl.querySelector('.post-body-clickable');
+  const actionsEl = postEl.querySelector('.post-actions');
+  const gridEl    = postEl.querySelector('.photo-grid'); // may be null
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'post-edit-textarea';
+  textarea.value = post.body;
+  textarea.rows  = 3;
+
+  // Image state for this edit session
+  let keepImageUrls  = [...(post.image_urls || [])];
+  let editImageFiles = [];
+
+  const imageEditArea = document.createElement('div');
+  imageEditArea.className = 'compose-images-preview';
+
+  function renderEditImages() {
+    // Revoke any previous blob URLs before wiping innerHTML
+    imageEditArea.querySelectorAll('img').forEach(img => {
+      if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    });
+    imageEditArea.innerHTML = '';
+
+    keepImageUrls.forEach((url, idx) => {
+      imageEditArea.appendChild(buildEditThumb(url, () => {
+        keepImageUrls.splice(idx, 1);
+        renderEditImages();
+      }));
+    });
+
+    editImageFiles.forEach((file, idx) => {
+      const blobUrl = URL.createObjectURL(file);
+      imageEditArea.appendChild(buildEditThumb(blobUrl, () => {
+        URL.revokeObjectURL(blobUrl);
+        editImageFiles.splice(idx, 1);
+        renderEditImages();
+      }));
+    });
+
+    if (keepImageUrls.length + editImageFiles.length < 4) {
+      const addBtn = document.createElement('button');
+      addBtn.type      = 'button';
+      addBtn.className = 'compose-img-add';
+      addBtn.title     = 'Add image';
+      addBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+      addBtn.addEventListener('click', () => {
+        const fi = document.createElement('input');
+        fi.type = 'file';
+        fi.accept = 'image/jpeg,image/png,image/gif,image/webp';
+        fi.multiple = true;
+        fi.style.display = 'none';
+        fi.addEventListener('change', () => {
+          const remaining = 4 - keepImageUrls.length - editImageFiles.length;
+          Array.from(fi.files).slice(0, remaining).forEach(f => editImageFiles.push(f));
+          fi.remove();
+          renderEditImages();
+        });
+        document.body.appendChild(fi);
+        fi.click();
+      });
+      imageEditArea.appendChild(addBtn);
+    }
+  }
+
+  renderEditImages();
+
+  const editBar   = document.createElement('div');
+  editBar.className = 'post-edit-bar';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn btn-ghost btn-sm';
+  cancelBtn.textContent = 'Cancel';
+  const saveBtn   = document.createElement('button');
+  saveBtn.className   = 'btn btn-primary btn-sm';
+  saveBtn.textContent = 'Save';
+  editBar.appendChild(cancelBtn);
+  editBar.appendChild(saveBtn);
+
+  bodyEl.replaceWith(textarea);
+  if (gridEl) {
+    gridEl.replaceWith(imageEditArea);
+  } else {
+    textarea.after(imageEditArea);
+  }
+  actionsEl.replaceWith(editBar);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+  const restore = () => {
+    imageEditArea.querySelectorAll('img').forEach(img => {
+      if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    });
+    textarea.replaceWith(bodyEl);
+    if (gridEl) {
+      imageEditArea.replaceWith(gridEl);
+    } else {
+      imageEditArea.remove();
+    }
+    editBar.replaceWith(actionsEl);
+  };
+
+  cancelBtn.addEventListener('click', restore);
+
+  saveBtn.addEventListener('click', async () => {
+    const newBody     = textarea.value.trim();
+    const totalImages = keepImageUrls.length + editImageFiles.length;
+    if (!newBody && totalImages === 0) { showToast('Post cannot be empty', true); return; }
+    if (newBody.length > MAX_CHARS)    { showToast('Post too long', true); return; }
+    saveBtn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('body', newBody);
+      keepImageUrls.forEach(url => fd.append('keep_images[]', url.split('/').pop()));
+      editImageFiles.forEach(f  => fd.append('images[]', f));
+      const updated  = await apiFetch(`posts/${post.id}`, { method: 'PUT', body: fd });
+      const newPostEl = renderPost(updated);
+      postEl.replaceWith(newPostEl);
+      showToast('Post updated');
+    } catch (e) {
+      showToast(e.message, true);
+      saveBtn.disabled = false;
+    }
+  });
+}
+
+function buildEditThumb(src, onRemove) {
+  const thumb = document.createElement('div');
+  thumb.className = 'compose-img-thumb';
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = '';
+  const btn = document.createElement('button');
+  btn.type      = 'button';
+  btn.className = 'compose-img-thumb-remove';
+  btn.title     = 'Remove';
+  btn.textContent = '×';
+  btn.addEventListener('click', onRemove);
+  thumb.appendChild(img);
+  thumb.appendChild(btn);
+  return thumb;
 }
 
 function renderQuoteCard(quote) {
@@ -734,9 +936,12 @@ threadModal.addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (!threadModal.classList.contains('hidden'))   closeThread();
-    if (!composeModal.classList.contains('hidden'))  closeComposeModal();
+    if (!lightboxEl.classList.contains('hidden'))    closeLightbox();
+    else if (!threadModal.classList.contains('hidden'))   closeThread();
+    else if (!composeModal.classList.contains('hidden'))  closeComposeModal();
   }
+  if (e.key === 'ArrowLeft'  && !lightboxEl.classList.contains('hidden')) lightboxNav(-1);
+  if (e.key === 'ArrowRight' && !lightboxEl.classList.contains('hidden')) lightboxNav(1);
 });
 
 function renderThread(data) {
@@ -813,18 +1018,26 @@ function openComposeModal(mode, post) {
   }
 
   composeModalInput.value = '';
-  updateComposeModalCount();
+  clearComposeImages(composeModalImageFiles, composeModalImagePreview, updateComposeModalCount);
   composeModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   setTimeout(() => composeModalInput.focus(), 50);
 }
 
 function closeComposeModal() {
+  clearComposeImages(composeModalImageFiles, composeModalImagePreview, updateComposeModalCount);
   composeModal.classList.add('hidden');
   document.body.style.overflow = '';
   composeMode = null;
   composeTargetId = null;
 }
+
+// ── Compose modal image attach ────────────────────────────
+composeModalAttachBtn.addEventListener('click', () => composeModalImageFile.click());
+composeModalImageFile.addEventListener('change', () => {
+  addFilesToCompose(Array.from(composeModalImageFile.files), composeModalImageFiles, composeModalImagePreview, updateComposeModalCount);
+  composeModalImageFile.value = '';
+});
 
 composeModalCancel.addEventListener('click', closeComposeModal);
 composeModal.addEventListener('click', e => {
@@ -841,7 +1054,7 @@ function updateComposeModalCount() {
   const left = MAX_CHARS - len;
   const pct  = Math.min(len / MAX_CHARS, 1);
 
-  composeModalSubmit.disabled = len === 0 || left < 0 || composeIsSubmitting;
+  composeModalSubmit.disabled = (len === 0 && composeModalImageFiles.length === 0) || left < 0 || composeIsSubmitting;
   composeModalFill.setAttribute('stroke-dashoffset', CIRC * (1 - pct));
   composeModalRing.setAttribute('class', 'char-ring' + (left < 0 ? ' danger' : left < 20 ? ' warn' : ''));
   composeModalLeft.textContent = left <= 20 ? left : '';
@@ -851,23 +1064,19 @@ function updateComposeModalCount() {
 composeModalSubmit.addEventListener('click', async () => {
   if (composeIsSubmitting || !currentUser || !composeTargetId) return;
   const body = composeModalInput.value.trim();
-  if (!body) return;
+  if (!body && composeModalImageFiles.length === 0) return;
 
-  const payload = { body };
-  if (composeMode === 'reply') payload.parent_id = composeTargetId;
-  if (composeMode === 'quote') payload.quote_id  = composeTargetId;
+  const fd = new FormData();
+  fd.append('body', body);
+  if (composeMode === 'reply') fd.append('parent_id', composeTargetId);
+  if (composeMode === 'quote') fd.append('quote_id',  composeTargetId);
+  composeModalImageFiles.forEach(f => fd.append('images[]', f));
 
   composeIsSubmitting = composeModalSubmit.disabled = true;
   try {
-    await apiFetch('posts', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
-    });
+    await apiFetch('posts', { method: 'POST', body: fd });
     closeComposeModal();
     showToast(composeMode === 'reply' ? 'Reply posted' : 'Quote posted');
-
-    // Refresh feed
     loadPosts(1, true);
   } catch (e) {
     showToast(e.message, true);
@@ -1259,6 +1468,97 @@ adminEditSave.addEventListener('click', async () => {
   }
 });
 
+// ── Multi-image compose helpers ───────────────────────────
+function addFilesToCompose(files, imageFilesArr, previewEl, updateFn) {
+  for (const file of files) {
+    if (imageFilesArr.length >= 4) { showToast('Maximum 4 images per post', true); break; }
+    imageFilesArr.push(file);
+  }
+  renderComposePreviews(imageFilesArr, previewEl, updateFn);
+}
+
+function clearComposeImages(imageFilesArr, previewEl, updateFn) {
+  previewEl.querySelectorAll('img').forEach(img => URL.revokeObjectURL(img.src));
+  imageFilesArr.length = 0;
+  previewEl.innerHTML = '';
+  previewEl.classList.add('hidden');
+  if (updateFn) updateFn();
+}
+
+function renderComposePreviews(imageFilesArr, previewEl, updateFn) {
+  previewEl.querySelectorAll('img').forEach(img => URL.revokeObjectURL(img.src));
+  previewEl.innerHTML = '';
+  if (imageFilesArr.length === 0) {
+    previewEl.classList.add('hidden');
+  } else {
+    previewEl.classList.remove('hidden');
+    imageFilesArr.forEach((file, idx) => {
+      const url   = URL.createObjectURL(file);
+      const thumb = document.createElement('div');
+      thumb.className = 'compose-img-thumb';
+      const img   = document.createElement('img');
+      img.src = url;
+      img.alt = '';
+      const btn   = document.createElement('button');
+      btn.className   = 'compose-img-thumb-remove';
+      btn.title       = 'Remove';
+      btn.textContent = '×';
+      btn.addEventListener('click', () => {
+        URL.revokeObjectURL(url);
+        imageFilesArr.splice(idx, 1);
+        renderComposePreviews(imageFilesArr, previewEl, updateFn);
+      });
+      thumb.appendChild(img);
+      thumb.appendChild(btn);
+      previewEl.appendChild(thumb);
+    });
+  }
+  if (updateFn) updateFn();
+}
+
+// ── Photo grid (post image display) ──────────────────────
+function renderPhotoGrid(imageUrls) {
+  if (!imageUrls || imageUrls.length === 0) return '';
+  const n = imageUrls.length;
+  const items = imageUrls.map((url, i) =>
+    `<div class="photo-grid-item" data-index="${i}"><img src="${esc(url)}" alt="Post image" loading="lazy"></div>`
+  ).join('');
+  return `<div class="photo-grid photo-grid-${n}">${items}</div>`;
+}
+
+// ── Lightbox ──────────────────────────────────────────────
+function openLightbox(images, startIndex) {
+  lightboxImages = images;
+  lightboxIndex  = startIndex;
+  updateLightbox();
+  lightboxEl.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeLightbox() {
+  lightboxEl.classList.add('hidden');
+  document.body.style.overflow = '';
+  lightboxImg.src = '';
+}
+
+function lightboxNav(dir) {
+  lightboxIndex = (lightboxIndex + dir + lightboxImages.length) % lightboxImages.length;
+  updateLightbox();
+}
+
+function updateLightbox() {
+  lightboxImg.src = lightboxImages[lightboxIndex];
+  const multi = lightboxImages.length > 1;
+  lightboxCounter.textContent = multi ? `${lightboxIndex + 1} / ${lightboxImages.length}` : '';
+  lightboxPrev.style.display  = multi ? '' : 'none';
+  lightboxNext.style.display  = multi ? '' : 'none';
+}
+
+lightboxClose.addEventListener('click', closeLightbox);
+lightboxEl.addEventListener('click', e => { if (e.target === lightboxEl) closeLightbox(); });
+lightboxPrev.addEventListener('click', e => { e.stopPropagation(); lightboxNav(-1); });
+lightboxNext.addEventListener('click', e => { e.stopPropagation(); lightboxNav(1); });
+
 // ── Utilities ─────────────────────────────────────────────
 function esc(str) {
   return String(str)
@@ -1291,6 +1591,10 @@ function heartSvg(filled) {
 
 function trashSvg() {
   return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>`;
+}
+
+function editSvg() {
+  return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
 }
 
 function followSvg(following) {

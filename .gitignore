@@ -5,6 +5,8 @@ magpie.db-shm
 magpie.db-wal
 
 # User Uploads
+uploads/posts/*
+!uploads/posts/.gitkeep
 uploads/avatars/*
 !uploads/avatars/.gitkeep
 !uploads/avatars/presets/

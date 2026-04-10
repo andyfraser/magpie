@@ -4,11 +4,13 @@ header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit(0);
 
-const DB_PATH         = __DIR__ . '/magpie.db';
-const UPLOADS_DIR     = __DIR__ . '/uploads/avatars/';
-const UPLOADS_URL     = '/uploads/avatars/';
-const MAX_POST_LENGTH = 500;
-const SCHEMA_VERSION  = 6;
+const DB_PATH              = __DIR__ . '/magpie.db';
+const UPLOADS_DIR          = __DIR__ . '/uploads/avatars/';
+const UPLOADS_URL          = '/uploads/avatars/';
+const POSTS_UPLOADS_DIR    = __DIR__ . '/uploads/posts/';
+const POSTS_UPLOADS_URL    = '/uploads/posts/';
+const MAX_POST_LENGTH      = 500;
+const SCHEMA_VERSION       = 8;
 
 // ── Database ──────────────────────────────────────────────
 
@@ -53,9 +55,11 @@ function get_db(): SQLite3 {
             user_id    INTEGER NOT NULL REFERENCES users(id),
             username   TEXT    NOT NULL,
             body       TEXT    NOT NULL,
+            image      TEXT,
             likes      INTEGER NOT NULL DEFAULT 0,
             parent_id  INTEGER REFERENCES posts(id),
             quote_id   INTEGER REFERENCES posts(id),
+            edited_at  INTEGER,
             created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS liked_posts (
@@ -284,6 +288,17 @@ function format_post_row(array $row, ?int $uid): array {
     $row['own']         = $uid ? ((int)$row['user_id'] === $uid) : false;
     $row['following']   = (bool)($row['following'] ?? false);
     $row['avatar_url']  = !empty($row['user_avatar']) ? UPLOADS_URL . $row['user_avatar'] : null;
+    $image_urls = [];
+    if (!empty($row['image'])) {
+        $decoded = json_decode($row['image'], true);
+        if (is_array($decoded)) {
+            foreach ($decoded as $fn) $image_urls[] = POSTS_UPLOADS_URL . $fn;
+        } else {
+            $image_urls[] = POSTS_UPLOADS_URL . $row['image'];
+        }
+    }
+    $row['image_urls'] = $image_urls;
+    $row['edited_at']   = isset($row['edited_at']) && $row['edited_at'] !== null ? (int)$row['edited_at'] : null;
 
     $row['parent_username']     = $row['parent_username']     ?? null;
     $row['parent_display_name'] = $row['parent_display_name'] ?? null;
@@ -301,7 +316,7 @@ function format_post_row(array $row, ?int $uid): array {
         $row['quote'] = null;
     }
 
-    unset($row['user_avatar'], $row['liked_flag'],
+    unset($row['user_avatar'], $row['liked_flag'], $row['image'],
           $row['quote_post_id'], $row['quote_body'], $row['quote_username'],
           $row['quote_created_at'], $row['quote_display_name'], $row['quote_avatar_file']);
 
@@ -320,6 +335,16 @@ function delete_post_cascade(SQLite3 $db, int $post_id): void {
     $res = db_query($db, 'SELECT id FROM posts WHERE parent_id=:id', [':id' => $post_id]);
     while ($child = $res->fetchArray(SQLITE3_ASSOC)) {
         delete_post_cascade($db, (int)$child['id']);
+    }
+    // Delete post images if present
+    $post_data = db_query_single($db, 'SELECT image FROM posts WHERE id=:id', [':id' => $post_id], true);
+    if ($post_data && !empty($post_data['image'])) {
+        $decoded = json_decode($post_data['image'], true);
+        $filenames = is_array($decoded) ? $decoded : [$post_data['image']];
+        foreach ($filenames as $fn) {
+            $p = POSTS_UPLOADS_DIR . $fn;
+            if (file_exists($p)) unlink($p);
+        }
     }
     db_exec($db, 'DELETE FROM liked_posts   WHERE post_id=:id', [':id' => $post_id]);
     db_exec($db, 'DELETE FROM notifications WHERE post_id=:id', [':id' => $post_id]);
@@ -344,6 +369,16 @@ function delete_user_data(SQLite3 $db, int $uid): void {
     db_exec($db, 'UPDATE posts SET parent_id=NULL WHERE user_id=:id AND parent_id IS NOT NULL', [':id' => $uid]);
     db_exec($db, 'DELETE FROM liked_posts WHERE post_id IN (SELECT id FROM posts WHERE user_id=:id)', [':id' => $uid]);
     db_exec($db, 'DELETE FROM notifications WHERE post_id IN (SELECT id FROM posts WHERE user_id=:id)', [':id' => $uid]);
+    // Clean up images for any remaining posts
+    $img_res = db_query($db, 'SELECT image FROM posts WHERE user_id=:id AND image IS NOT NULL', [':id' => $uid]);
+    while ($img_row = $img_res->fetchArray(SQLITE3_ASSOC)) {
+        $decoded = json_decode($img_row['image'], true);
+        $filenames = is_array($decoded) ? $decoded : [$img_row['image']];
+        foreach ($filenames as $fn) {
+            $p = POSTS_UPLOADS_DIR . $fn;
+            if (file_exists($p)) unlink($p);
+        }
+    }
     db_exec($db, 'DELETE FROM posts WHERE user_id=:id', [':id' => $uid]);
     db_exec($db, 'DELETE FROM users WHERE id=:id',      [':id' => $uid]);
 }
@@ -767,12 +802,40 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
     if ($u['disabled']) json_error('Your account has been disabled', 403);
     if (!$u['email_verified']) json_error('Please verify your email address to post', 403);
 
-    $input     = json_decode(file_get_contents('php://input'), true);
-    $body      = trim($input['body'] ?? '');
-    $parent_id = isset($input['parent_id']) && is_int($input['parent_id']) ? (int)$input['parent_id'] : null;
-    $quote_id  = isset($input['quote_id'])  && is_int($input['quote_id'])  ? (int)$input['quote_id']  : null;
+    $body      = trim($_POST['body'] ?? '');
+    $parent_id = isset($_POST['parent_id']) && ctype_digit((string)$_POST['parent_id']) ? (int)$_POST['parent_id'] : null;
+    $quote_id  = isset($_POST['quote_id'])  && ctype_digit((string)$_POST['quote_id'])  ? (int)$_POST['quote_id']  : null;
 
-    if ($body === '')                       json_error('Post body is required');
+    // Handle optional image uploads (up to 4)
+    $uploaded_filenames = [];
+    if (!empty($_FILES['images'])) {
+        $f = $_FILES['images'];
+        $count = is_array($f['name']) ? count($f['name']) : 1;
+        if ($count > 4) json_error('Maximum 4 images allowed per post');
+        if (!is_dir(POSTS_UPLOADS_DIR)) mkdir(POSTS_UPLOADS_DIR, 0755, true);
+        for ($i = 0; $i < $count; $i++) {
+            $err  = is_array($f['error'])    ? $f['error'][$i]    : $f['error'];
+            $size = is_array($f['size'])     ? $f['size'][$i]     : $f['size'];
+            $tmp  = is_array($f['tmp_name']) ? $f['tmp_name'][$i] : $f['tmp_name'];
+            if ($err === UPLOAD_ERR_NO_FILE) continue;
+            if ($err !== UPLOAD_ERR_OK) json_error('Upload error (code ' . $err . ')');
+            if ($size > 5 * 1024 * 1024) json_error('Image too large (max 5 MB)');
+            $info = @getimagesize($tmp);
+            if (!$info) json_error('Invalid image file');
+            $allowed = [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_GIF, IMAGETYPE_WEBP];
+            if (!in_array($info[2], $allowed)) json_error('Only JPEG, PNG, GIF and WebP are allowed');
+            $ext      = image_type_to_extension($info[2], false);
+            $filename = $uid . '_' . bin2hex(random_bytes(8)) . '.' . $ext;
+            if (!move_uploaded_file($tmp, POSTS_UPLOADS_DIR . $filename)) {
+                foreach ($uploaded_filenames as $fn) { $p = POSTS_UPLOADS_DIR . $fn; if (file_exists($p)) unlink($p); }
+                json_error('Failed to save image');
+            }
+            $uploaded_filenames[] = $filename;
+        }
+    }
+    $image_json = !empty($uploaded_filenames) ? json_encode($uploaded_filenames) : null;
+
+    if ($body === '' && empty($uploaded_filenames)) json_error('Post body is required');
     if (mb_strlen($body) > MAX_POST_LENGTH) json_error('Post exceeds ' . MAX_POST_LENGTH . ' character limit');
 
     if ($parent_id) {
@@ -784,13 +847,14 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
         if (!$quoted) json_error('Quoted post not found', 404);
     }
 
-    db_exec($db, 'INSERT INTO posts (user_id, username, body, parent_id, quote_id, created_at) VALUES (:u,:n,:b,:p,:q,:t)', [
-        ':u' => $uid,
-        ':n' => $u['username'],
-        ':b' => $body,
-        ':p' => $parent_id,
-        ':q' => $quote_id,
-        ':t' => time()
+    db_exec($db, 'INSERT INTO posts (user_id, username, body, image, parent_id, quote_id, created_at) VALUES (:u,:n,:b,:img,:p,:q,:t)', [
+        ':u'   => $uid,
+        ':n'   => $u['username'],
+        ':b'   => $body,
+        ':img' => $image_json,
+        ':p'   => $parent_id,
+        ':q'   => $quote_id,
+        ':t'   => time()
     ]);
 
     $nid = $db->lastInsertRowID();
@@ -842,6 +906,86 @@ if ($method === 'POST' && $resource === 'posts' && $id && $sub2 === 'like') {
         db_exec($db, 'UPDATE posts SET likes=likes+1 WHERE id=:id', [':id' => $id]);
     }
 
+    json_ok(fetch_post($db, $id, $uid));
+}
+
+if ($method === 'PUT' && $resource === 'posts' && $id) {
+    $uid  = require_auth();
+    $post = db_query_single($db, 'SELECT user_id, image FROM posts WHERE id=:id', [':id' => $id], true);
+    if (!$post)                         json_error('Post not found', 404);
+    if ((int)$post['user_id'] !== $uid) json_error('Forbidden', 403);
+
+    $ct = strtolower($_SERVER['CONTENT_TYPE'] ?? '');
+    if (str_starts_with($ct, 'application/json')) {
+        // Legacy text-only edit
+        $input      = json_decode(file_get_contents('php://input'), true);
+        $body       = trim($input['body'] ?? '');
+        $image_json = $post['image'];
+        if ($body === '') json_error('Post body is required');
+    } else {
+        // Multipart edit: body + optional image changes
+        $body = trim($_POST['body'] ?? '');
+
+        $existing = [];
+        if (!empty($post['image'])) {
+            $decoded  = json_decode($post['image'], true);
+            $existing = is_array($decoded) ? $decoded : [$post['image']];
+        }
+
+        // Filenames the client wants to keep — validated against what the post actually owns
+        $keep = isset($_POST['keep_images']) ? (array)$_POST['keep_images'] : $existing;
+        $kept = array_values(array_filter($keep, fn($fn) => in_array($fn, $existing, true)));
+
+        // Delete images not being kept
+        foreach ($existing as $fn) {
+            if (!in_array($fn, $kept, true)) {
+                $p = POSTS_UPLOADS_DIR . $fn;
+                if (file_exists($p)) unlink($p);
+            }
+        }
+
+        // Upload new images
+        $new_files = [];
+        if (!empty($_FILES['images'])) {
+            $f     = $_FILES['images'];
+            $count = is_array($f['name']) ? count($f['name']) : 1;
+            if (count($kept) + $count > 4) json_error('Maximum 4 images allowed per post');
+            if (!is_dir(POSTS_UPLOADS_DIR)) mkdir(POSTS_UPLOADS_DIR, 0755, true);
+            for ($i = 0; $i < $count; $i++) {
+                $err  = is_array($f['error'])    ? $f['error'][$i]    : $f['error'];
+                $size = is_array($f['size'])     ? $f['size'][$i]     : $f['size'];
+                $tmp  = is_array($f['tmp_name']) ? $f['tmp_name'][$i] : $f['tmp_name'];
+                if ($err === UPLOAD_ERR_NO_FILE) continue;
+                if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) json_error('Image too large (max 5 MB)');
+                if ($err !== UPLOAD_ERR_OK) json_error('Upload error (code ' . $err . ')');
+                if ($size > 5 * 1024 * 1024) json_error('Image too large (max 5 MB)');
+                $info = @getimagesize($tmp);
+                if (!$info) json_error('Invalid image file');
+                $allowed = [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_GIF, IMAGETYPE_WEBP];
+                if (!in_array($info[2], $allowed)) json_error('Only JPEG, PNG, GIF and WebP are allowed');
+                $ext      = image_type_to_extension($info[2], false);
+                $filename = $uid . '_' . bin2hex(random_bytes(8)) . '.' . $ext;
+                if (!move_uploaded_file($tmp, POSTS_UPLOADS_DIR . $filename)) {
+                    foreach ($new_files as $nf) { $p = POSTS_UPLOADS_DIR . $nf; if (file_exists($p)) unlink($p); }
+                    json_error('Failed to save image');
+                }
+                $new_files[] = $filename;
+            }
+        }
+
+        $all_images = array_merge($kept, $new_files);
+        $image_json = !empty($all_images) ? json_encode($all_images) : null;
+        if ($body === '' && $image_json === null) json_error('Post body is required');
+    }
+
+    if (mb_strlen($body) > MAX_POST_LENGTH) json_error('Post exceeds ' . MAX_POST_LENGTH . ' character limit');
+
+    db_exec($db, 'UPDATE posts SET body=:b, image=:img, edited_at=:e WHERE id=:id', [
+        ':b'   => $body,
+        ':img' => $image_json,
+        ':e'   => time(),
+        ':id'  => $id,
+    ]);
     json_ok(fetch_post($db, $id, $uid));
 }
 
