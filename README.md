@@ -1,6 +1,6 @@
 # Magpie
 
-![PHP Version](https://img.shields.io/badge/PHP-%3E%3D%208.0-777bb4?logo=php)
+![PHP Version](https://img.shields.io/badge/PHP-%3E%3D%208.1-777bb4?logo=php)
 ![Database](https://img.shields.io/badge/database-SQLite3-003b57?logo=sqlite)
 ![License](https://img.shields.io/badge/license-open%20source-green)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
@@ -25,7 +25,7 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 
 ## Tech Stack
 
-- **Backend:** PHP 8.0+ (no framework)
+- **Backend:** PHP 8.1+ (no framework)
 - **Database:** SQLite3 (schema auto-created and versioned)
 - **Frontend:** Vanilla JavaScript (ES6+, async/await, fetch)
 - **Styling:** CSS3 with CSS Variables
@@ -36,7 +36,7 @@ No build steps, no `npm install`, no `composer install`.
 
 ### Prerequisites
 
-PHP 8.0 or higher with the `sqlite3` extension.
+PHP 8.1 or higher with the sqlite3 extension.
 
 ### Running the App
 
@@ -73,3 +73,14 @@ The first person to register is automatically granted administrator privileges.
 ## License
 
 This project is open source and free to use.
+
+## Browser Compatibility
+
+Magpie uses modern JavaScript (ES2020+) and CSS features. To ensure all functionality (including optional chaining) and layout features (like Flexbox gap and aspect-ratio) work correctly, the following minimum browser versions are recommended:
+
+| Browser | Minimum Version | Release Date |
+| :--- | :--- | :--- |
+| **Google Chrome** | **88** | Jan 2021 |
+| **Microsoft Edge** | **88** | Jan 2021 |
+| **Mozilla Firefox** | **89** | June 2021 |
+| **Apple Safari** | **15** | Sept 2021 |
