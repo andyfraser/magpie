@@ -1,5 +1,10 @@
 # Magpie
 
+![PHP Version](https://img.shields.io/badge/PHP-%3E%3D%208.0-777bb4?logo=php)
+![Database](https://img.shields.io/badge/database-SQLite3-003b57?logo=sqlite)
+![License](https://img.shields.io/badge/license-open%20source-green)
+![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
+
 Magpie is a minimalist, Twitter-like social platform designed as a Single Page Application (SPA) with zero external dependencies. It's built using plain PHP for the backend and vanilla JavaScript for the frontend.
 
 ## Features
@@ -13,7 +18,7 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 - **Password Reset:** Recover access to your account with secure reset links.
 - **Notifications:** Get notified when someone replies to, quotes, or follows you; unread badge in the sidebar.
 - **User Discovery:** Search users by username or display name.
-- **Custom Profiles:** Display name, bio, and avatar (JPEG, PNG, GIF, WebP — max 2 MB).
+- **Custom Profiles:** Display name, bio, and avatar (JPEG, PNG, GIF, WebP — max 2 MB). Choose from built-in preset avatars or upload your own.
 - **Account Deletion:** Users can permanently delete their own account and all associated data.
 - **Admin Panel:** Edit user profiles, toggle admin privileges, disable accounts, and delete users.
 - **Responsive:** Works on mobile and desktop.
@@ -62,6 +67,7 @@ The first person to register is automatically granted administrator privileges.
 - `css/style.css` — All application styles
 - `logo.png` — App logo (used as favicon)
 - `uploads/avatars/` — User avatar storage (created automatically)
+- `uploads/avatars/presets/` — Built-in SVG preset avatars
 - `magpie.db` — SQLite database (auto-generated on first request)
 
 ## License
