@@ -537,6 +537,26 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'resend-verification
 if ($method === 'POST' && $resource === 'users' && $sub1 === 'me' && $sub2 === 'avatar') {
     $uid = require_auth();
 
+    // Preset selection (JSON body with preset name)
+    $ct = strtolower($_SERVER['CONTENT_TYPE'] ?? '');
+    if (str_starts_with($ct, 'application/json')) {
+        $body   = json_decode(file_get_contents('php://input'), true);
+        $preset = $body['preset'] ?? '';
+        $valid  = array_map(fn($n) => "magpie_0{$n}.svg", range(1,9));
+        $valid[] = 'magpie_10.svg';
+        if (!in_array($preset, $valid, true)) json_error('Invalid preset name');
+
+        $old = db_query_single($db, 'SELECT avatar FROM users WHERE id=:id', [':id' => $uid], true);
+        if ($old && $old['avatar'] && !str_starts_with($old['avatar'], 'presets/')) {
+            $p = UPLOADS_DIR . $old['avatar'];
+            if (file_exists($p)) unlink($p);
+        }
+
+        db_exec($db, 'UPDATE users SET avatar=:v WHERE id=:id', [':v' => 'presets/' . $preset, ':id' => $uid]);
+        json_ok(['user' => format_user(db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true))]);
+    }
+
+    // File upload
     if (empty($_FILES['avatar'])) json_error('No file uploaded');
     $file = $_FILES['avatar'];
     if ($file['error'] !== UPLOAD_ERR_OK) json_error('Upload error (code ' . $file['error'] . ')');
@@ -554,7 +574,7 @@ if ($method === 'POST' && $resource === 'users' && $sub1 === 'me' && $sub2 === '
     if (!is_dir(UPLOADS_DIR)) mkdir(UPLOADS_DIR, 0755, true);
 
     $old = db_query_single($db, 'SELECT avatar FROM users WHERE id=:id', [':id' => $uid], true);
-    if ($old && $old['avatar']) {
+    if ($old && $old['avatar'] && !str_starts_with($old['avatar'], 'presets/')) {
         $p = UPLOADS_DIR . $old['avatar'];
         if (file_exists($p)) unlink($p);
     }

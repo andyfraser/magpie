@@ -71,7 +71,9 @@ let currentFollowingTab  = 'following';
 // Profile view
 const profileAvatar  = document.getElementById('profile-avatar');
 const avatarUpload   = document.getElementById('avatar-upload');
+const avatarPicker   = document.getElementById('avatar-picker');
 const avatarFile     = document.getElementById('avatar-file');
+const avatarUploadBtn = document.getElementById('avatar-upload-btn');
 const pfDisplayName  = document.getElementById('pf-display-name');
 const pfUsername     = document.getElementById('pf-username');
 const pfEmail        = document.getElementById('pf-email');
@@ -461,6 +463,8 @@ function updateAuthUI(user) {
   if (currentUser) {
     setAvatarEl(composeModalAvatar, currentUser);
   }
+  document.querySelectorAll(`.post[data-username="${CSS.escape(user.username)}"] .avatar`)
+    .forEach(el => setAvatarEl(el, user));
 }
 
 function setAvatarEl(el, user) {
@@ -563,8 +567,9 @@ function renderPost(post, opts = {}) {
   const { inThread = false, isHighlight = false } = opts;
 
   const div = document.createElement('div');
-  div.className  = 'post' + (isHighlight ? ' post-highlight' : '');
-  div.dataset.id = post.id;
+  div.className        = 'post' + (isHighlight ? ' post-highlight' : '');
+  div.dataset.id       = post.id;
+  div.dataset.username = post.username;
 
   const displayName = post.display_name || post.username;
 
@@ -1011,7 +1016,47 @@ function updateBioCounter() {
   bioChars.textContent = 160 - pfBio.value.length;
 }
 
-avatarUpload.addEventListener('click', () => avatarFile.click());
+// Toggle avatar picker open/closed
+avatarUpload.addEventListener('click', () => {
+  avatarPicker.classList.toggle('open');
+  if (avatarPicker.classList.contains('open')) syncPresetHighlight();
+});
+
+// Highlight whichever preset matches the current avatar
+function syncPresetHighlight() {
+  const current = currentUser?.avatar || '';
+  document.querySelectorAll('.avatar-preset').forEach(img => {
+    const match = current.endsWith('presets/' + img.dataset.preset);
+    img.classList.toggle('active', match);
+  });
+}
+
+// Preset click — select a magpie avatar
+document.querySelectorAll('.avatar-preset').forEach(img => {
+  img.addEventListener('click', async () => {
+    try {
+      const data = await apiFetch('users/me/avatar', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ preset: img.dataset.preset }),
+      });
+      currentUser = data.user;
+      updateAuthUI(data.user);
+      setAvatarEl(profileAvatar, data.user);
+      profileAvatar.style.width    = '80px';
+      profileAvatar.style.height   = '80px';
+      profileAvatar.style.fontSize = '32px';
+      syncPresetHighlight();
+      avatarPicker.classList.remove('open');
+      showToast('Avatar updated');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  });
+});
+
+// Upload custom file
+avatarUploadBtn.addEventListener('click', () => avatarFile.click());
 avatarFile.addEventListener('change', async () => {
   const file = avatarFile.files[0];
   if (!file) return;
@@ -1025,6 +1070,7 @@ avatarFile.addEventListener('change', async () => {
     profileAvatar.style.width    = '80px';
     profileAvatar.style.height   = '80px';
     profileAvatar.style.fontSize = '32px';
+    avatarPicker.classList.remove('open');
     showToast('Avatar updated');
   } catch (e) {
     showToast(e.message, true);

@@ -1,0 +1,19 @@
+<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <!-- Surprised -->
+  <circle cx="60" cy="60" r="60" fill="#fff7ed"/>
+  <ellipse cx="27" cy="93" rx="8" ry="22" fill="#1a1a2e" transform="rotate(-22 27 93)"/>
+  <ellipse cx="57" cy="86" rx="27" ry="21" fill="#1a1a2e"/>
+  <ellipse cx="59" cy="89" rx="16" ry="13" fill="#e8edf3"/>
+  <ellipse cx="45" cy="76" rx="12" ry="7" fill="#e8edf3" transform="rotate(-15 45 76)"/>
+  <circle cx="67" cy="48" r="22" fill="#1a1a2e"/>
+  <!-- Wide surprised eye -->
+  <circle cx="75" cy="40" r="9.5" fill="white"/>
+  <circle cx="76" cy="41" r="5.5" fill="#1a1a2e"/>
+  <circle cx="78.5" cy="38.5" r="2" fill="white"/>
+  <!-- Raised eyebrow -->
+  <path d="M65,30 Q75,25 84,30" stroke="#e8edf3" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <!-- Open beak (upper) -->
+  <path d="M89,44 L103,47 L89,49" fill="#f59e0b"/>
+  <!-- Open beak (lower jaw) -->
+  <path d="M89,51 L100,55 L89,57" fill="#fde68a"/>
+</svg>

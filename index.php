@@ -322,15 +322,37 @@
 
       <div class="profile-editor">
 
-        <div class="avatar-upload" id="avatar-upload" title="Change photo">
-          <div class="avatar avatar-lg" id="profile-avatar">?</div>
-          <div class="avatar-upload-overlay">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-              <circle cx="12" cy="13" r="4"/>
-            </svg>
+        <div class="avatar-section">
+          <div class="avatar-upload" id="avatar-upload" title="Change photo">
+            <div class="avatar avatar-lg" id="profile-avatar">?</div>
+            <div class="avatar-upload-overlay">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                <circle cx="12" cy="13" r="4"/>
+              </svg>
+            </div>
           </div>
-          <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
+
+          <div class="avatar-picker" id="avatar-picker">
+            <p class="avatar-picker-label">Choose a magpie</p>
+            <div class="avatar-presets-grid">
+              <img src="/uploads/avatars/presets/magpie_01.svg" class="avatar-preset" data-preset="magpie_01.svg" title="Classic">
+              <img src="/uploads/avatars/presets/magpie_02.svg" class="avatar-preset" data-preset="magpie_02.svg" title="Cool Shades">
+              <img src="/uploads/avatars/presets/magpie_03.svg" class="avatar-preset" data-preset="magpie_03.svg" title="Bow Tie">
+              <img src="/uploads/avatars/presets/magpie_04.svg" class="avatar-preset" data-preset="magpie_04.svg" title="Crown">
+              <img src="/uploads/avatars/presets/magpie_05.svg" class="avatar-preset" data-preset="magpie_05.svg" title="Party Hat">
+              <img src="/uploads/avatars/presets/magpie_06.svg" class="avatar-preset" data-preset="magpie_06.svg" title="Pirate">
+              <img src="/uploads/avatars/presets/magpie_07.svg" class="avatar-preset" data-preset="magpie_07.svg" title="Winking">
+              <img src="/uploads/avatars/presets/magpie_08.svg" class="avatar-preset" data-preset="magpie_08.svg" title="Sleepy">
+              <img src="/uploads/avatars/presets/magpie_09.svg" class="avatar-preset" data-preset="magpie_09.svg" title="Surprised">
+              <img src="/uploads/avatars/presets/magpie_10.svg" class="avatar-preset" data-preset="magpie_10.svg" title="Nerd">
+            </div>
+            <div class="avatar-picker-upload-row">
+              <span class="avatar-picker-or">or</span>
+              <button class="btn btn-ghost btn-sm" id="avatar-upload-btn">Upload your own</button>
+              <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
+            </div>
+          </div>
         </div>
 
         <div class="form-group">
