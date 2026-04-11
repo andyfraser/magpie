@@ -710,6 +710,8 @@ a { color: inherit; text-decoration: none; }
 
 /* ── Reply / Quote compose modal ─────────────────────────── */
 
+#compose-modal { z-index: 210; }
+
 .compose-modal {
   max-width: 560px;
   padding: 16px 24px 20px;

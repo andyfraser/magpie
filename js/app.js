@@ -920,7 +920,10 @@ async function toggleFollow(username) {
 }
 
 // ── Thread modal ──────────────────────────────────────────
+let currentThreadPostId = null;
+
 async function openThread(postId) {
+  currentThreadPostId = postId;
   threadContent.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
   threadModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -932,7 +935,16 @@ async function openThread(postId) {
   }
 }
 
+async function refreshThread() {
+  if (!currentThreadPostId) return;
+  try {
+    const data = await apiFetch(`posts/${currentThreadPostId}/thread`);
+    renderThread(data);
+  } catch (e) { /* silently ignore refresh errors */ }
+}
+
 function closeThread() {
+  currentThreadPostId = null;
   threadModal.classList.add('hidden');
   document.body.style.overflow = '';
 }
@@ -972,7 +984,13 @@ function renderThread(data) {
     threadContent.appendChild(sep);
 
     replies.forEach(r => {
-      threadContent.appendChild(renderPost(r, { inThread: true }));
+      const el = renderPost(r, { inThread: true });
+      const indent = (r.depth - 1) * 24;
+      if (indent > 0) {
+        el.style.marginLeft = indent + 'px';
+        el.style.borderLeft = '2px solid var(--border-dk)';
+      }
+      threadContent.appendChild(el);
     });
   } else {
     const none = document.createElement('div');
@@ -1079,11 +1097,16 @@ composeModalSubmit.addEventListener('click', async () => {
   if (composeMode === 'quote') fd.append('quote_id',  composeTargetId);
   composeModalImageFiles.forEach(f => fd.append('images[]', f));
 
+  const wasReply = composeMode === 'reply';
+  const threadWasOpen = !threadModal.classList.contains('hidden');
   composeIsSubmitting = composeModalSubmit.disabled = true;
   try {
     await apiFetch('posts', { method: 'POST', body: fd });
     closeComposeModal();
-    showToast(composeMode === 'reply' ? 'Reply posted' : 'Quote posted');
+    showToast(wasReply ? 'Reply posted' : 'Quote posted');
+    if (wasReply && threadWasOpen) {
+      refreshThread();
+    }
     loadPosts(1, true);
   } catch (e) {
     showToast(e.message, true);

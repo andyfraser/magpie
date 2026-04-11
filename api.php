@@ -771,6 +771,24 @@ if ($method === 'GET' && $resource === 'users' && !$sub1) {
 // POSTS
 // ══════════════════════════════════════════════════════════
 
+function fetch_descendants(SQLite3 $db, int $post_id, int $depth, ?int $uid, int &$count, int $max = 200): array {
+    if ($count >= $max) return [];
+    $cols   = post_select_cols('p', $uid);
+    $joins  = post_join_sql('p', $uid);
+    $res    = db_query($db, "SELECT $cols FROM posts p $joins WHERE p.parent_id=:id ORDER BY p.created_at ASC", [':id' => $post_id]);
+    $result = [];
+    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+        if ($count >= $max) break;
+        $formatted          = format_post_row($row, $uid);
+        $formatted['depth'] = $depth;
+        $result[]           = $formatted;
+        $count++;
+        $children = fetch_descendants($db, $formatted['id'], $depth + 1, $uid, $count, $max);
+        $result   = array_merge($result, $children);
+    }
+    return $result;
+}
+
 // GET /posts/:id/thread
 if ($method === 'GET' && $resource === 'posts' && $id && $sub2 === 'thread') {
     $uid  = current_user_id();
@@ -780,28 +798,18 @@ if ($method === 'GET' && $resource === 'posts' && $id && $sub2 === 'thread') {
     // Walk up the ancestor chain
     $ancestors = [];
     $pid       = $post['parent_id'];
-    $depth     = 0;
-    while ($pid && $depth < 20) {
+    $anc_depth = 0;
+    while ($pid && $anc_depth < 20) {
         $ancestor = fetch_post($db, $pid, $uid);
         if (!$ancestor) break;
         array_unshift($ancestors, $ancestor);
         $pid = $ancestor['parent_id'];
-        $depth++;
+        $anc_depth++;
     }
 
-    // Get direct replies
-    $cols  = post_select_cols('p', $uid);
-    $joins = post_join_sql('p', $uid);
-    $res   = db_query($db, "
-        SELECT $cols FROM posts p $joins
-        WHERE p.parent_id=:id
-        ORDER BY p.created_at ASC
-        LIMIT 100
-    ", [':id' => $id]);
-    $replies = [];
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
-        $replies[] = format_post_row($row, $uid);
-    }
+    // Recursively fetch all descendants (depth-first)
+    $count   = 0;
+    $replies = fetch_descendants($db, $id, 1, $uid, $count);
 
     json_ok(['ancestors' => $ancestors, 'post' => $post, 'replies' => $replies]);
 }
