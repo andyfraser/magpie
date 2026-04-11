@@ -10,6 +10,7 @@ const signupView     = document.getElementById('signup-view');
 const loginUsernameI = document.getElementById('login-username');
 const loginPasswordI = document.getElementById('login-password');
 const loginError     = document.getElementById('login-error');
+const loginRememberMe = document.getElementById('login-remember-me');
 const loginBtn       = document.getElementById('login-btn');
 const signupUsername = document.getElementById('signup-username');
 const signupEmail    = document.getElementById('signup-email');
@@ -96,6 +97,12 @@ const adminEditDis   = document.getElementById('admin-edit-disabled');
 const adminEditErr   = document.getElementById('admin-edit-error');
 const adminEditCancel= document.getElementById('admin-edit-cancel');
 const adminEditSave  = document.getElementById('admin-edit-save');
+
+const adminTabs          = document.getElementById('admin-tabs');
+const adminSettingsPanel = document.getElementById('admin-settings-panel');
+const adminRmbDays       = document.getElementById('admin-rmb-days');
+const adminSettingsErr   = document.getElementById('admin-settings-error');
+const adminSettingsSave  = document.getElementById('admin-settings-save');
 
 // Thread modal
 const threadModal    = document.getElementById('thread-modal');
@@ -221,7 +228,7 @@ function showView(name) {
   if (name === 'profile')       initProfileView();
   if (name === 'liked')         loadLikedPosts(1, true);
   if (name === 'following')     loadUsers();
-  if (name === 'admin')         loadAdminUsers();
+  if (name === 'admin')         loadAdminView('users');
   if (name === 'notifications') loadNotifications();
 }
 
@@ -349,7 +356,7 @@ loginBtn.addEventListener('click', async () => {
     const data = await apiFetch('auth/login', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ username, password }),
+      body:    JSON.stringify({ username, password, remember_me: loginRememberMe.checked }),
     });
     onLogin(data.user);
     loadPosts(1, true);
@@ -1332,6 +1339,57 @@ deleteAcctBtn.addEventListener('click', async () => {
 });
 
 // ── Admin view ────────────────────────────────────────────
+let currentAdminTab = 'users';
+
+function loadAdminView(tab) {
+  currentAdminTab = tab;
+  adminTabs.querySelectorAll('.feed-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const userList = document.getElementById('admin-user-list');
+  if (tab === 'users') {
+    userList.style.display = '';
+    adminSettingsPanel.style.display = 'none';
+    loadAdminUsers();
+  } else {
+    userList.style.display = 'none';
+    adminSettingsPanel.style.display = '';
+    loadAdminSettings();
+  }
+}
+
+adminTabs.addEventListener('click', e => {
+  const tab = e.target.closest('.feed-tab');
+  if (!tab || tab.dataset.tab === currentAdminTab) return;
+  loadAdminView(tab.dataset.tab);
+});
+
+async function loadAdminSettings() {
+  try {
+    const data = await apiFetch('admin/settings');
+    adminRmbDays.value = data.settings.remember_me_days;
+    adminSettingsErr.textContent = '';
+  } catch (e) {
+    adminSettingsErr.textContent = e.message;
+  }
+}
+
+adminSettingsSave.addEventListener('click', async () => {
+  adminSettingsErr.textContent = '';
+  adminSettingsSave.disabled = true;
+  try {
+    const data = await apiFetch('admin/settings', {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ remember_me_days: parseInt(adminRmbDays.value, 10) }),
+    });
+    adminRmbDays.value = data.settings.remember_me_days;
+    showToast('Settings saved');
+  } catch (e) {
+    adminSettingsErr.textContent = e.message;
+  } finally {
+    adminSettingsSave.disabled = false;
+  }
+});
+
 async function loadAdminUsers() {
   const list = document.getElementById('admin-user-list');
   list.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';

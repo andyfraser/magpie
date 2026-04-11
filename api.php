@@ -81,11 +81,24 @@ function get_db(): SQLite3 {
             read       INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS remember_tokens (
+            token   TEXT    NOT NULL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            expires INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT NOT NULL PRIMARY KEY,
+            value TEXT NOT NULL
+        );
     ');
     return $db;
 }
 
 // ── Helpers ───────────────────────────────────────────────
+
+function get_setting(SQLite3 $db, string $key, string $default = ''): string {
+    return (string)(db_query_single($db, 'SELECT value FROM settings WHERE key=:k', [':k' => $key]) ?? $default);
+}
 
 function json_error(string $msg, int $code = 400): never {
     http_response_code($code);
@@ -360,6 +373,7 @@ function delete_user_data(SQLite3 $db, int $uid): void {
     db_exec($db, 'DELETE FROM notifications WHERE user_id=:id OR actor_id=:id', [':id' => $uid]);
     db_exec($db, 'DELETE FROM follows WHERE follower_id=:id OR followee_id=:id', [':id' => $uid]);
     db_exec($db, 'DELETE FROM liked_posts WHERE user_id=:id', [':id' => $uid]);
+    db_exec($db, 'DELETE FROM remember_tokens WHERE user_id=:id', [':id' => $uid]);
 
     $res = db_query($db, 'SELECT id FROM posts WHERE user_id=:id AND parent_id IS NULL', [':id' => $uid]);
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
@@ -395,6 +409,20 @@ $id        = is_numeric($sub1) ? (int)$sub1 : null;
 $target_id = is_numeric($sub2) ? (int)$sub2 : null;
 
 $db = get_db();
+
+// Auto-login via remember-me cookie
+if (!isset($_SESSION['user_id']) && !empty($_COOKIE['magpie_rmb'])) {
+    $rmb_token = $_COOKIE['magpie_rmb'];
+    $rmb_row = db_query_single($db, 'SELECT user_id FROM remember_tokens WHERE token=:t AND expires > :now', [
+        ':t' => $rmb_token, ':now' => time()
+    ], true);
+    if ($rmb_row) {
+        $rmb_user = db_query_single($db, 'SELECT id, disabled FROM users WHERE id=:id', [':id' => $rmb_row['user_id']], true);
+        if ($rmb_user && !$rmb_user['disabled']) {
+            $_SESSION['user_id'] = (int)$rmb_user['id'];
+        }
+    }
+}
 
 // ══════════════════════════════════════════════════════════
 // AUTH
@@ -467,10 +495,30 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
         json_error('Your account has been disabled', 403);
 
     $_SESSION['user_id'] = $u['id'];
+
+    if (!empty($input['remember_me'])) {
+        $days    = max(1, (int)(get_setting($db, 'remember_me_days') ?: 30));
+        $token   = bin2hex(random_bytes(32));
+        $expires = time() + $days * 86400;
+        db_exec($db, 'INSERT INTO remember_tokens (token, user_id, expires) VALUES (:t, :u, :e)', [
+            ':t' => $token, ':u' => (int)$u['id'], ':e' => $expires,
+        ]);
+        setcookie('magpie_rmb', $token, [
+            'expires'  => $expires,
+            'path'     => '/',
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+    }
+
     json_ok(['user' => format_user($u)]);
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'logout') {
+    if (!empty($_COOKIE['magpie_rmb'])) {
+        db_exec($db, 'DELETE FROM remember_tokens WHERE token=:t', [':t' => $_COOKIE['magpie_rmb']]);
+        setcookie('magpie_rmb', '', ['expires' => time() - 3600, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
+    }
     session_destroy();
     json_ok(['ok' => true]);
 }
@@ -673,6 +721,9 @@ if ($method === 'PUT' && $resource === 'users' && $sub1 === 'me') {
 if ($method === 'DELETE' && $resource === 'users' && $sub1 === 'me') {
     $uid = require_auth();
     delete_user_data($db, $uid);
+    if (!empty($_COOKIE['magpie_rmb'])) {
+        setcookie('magpie_rmb', '', ['expires' => time() - 3600, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
+    }
     session_destroy();
     json_ok(['deleted' => true]);
 }
@@ -1128,6 +1179,28 @@ if ($method === 'DELETE' && $resource === 'admin' && $sub1 === 'users' && $targe
 
     delete_user_data($db, $tid);
     json_ok(['deleted' => true]);
+}
+
+if ($method === 'GET' && $resource === 'admin' && $sub1 === 'settings') {
+    require_admin($db);
+    json_ok(['settings' => [
+        'remember_me_days' => (int)(get_setting($db, 'remember_me_days') ?: 30),
+    ]]);
+}
+
+if ($method === 'PATCH' && $resource === 'admin' && $sub1 === 'settings') {
+    require_admin($db);
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (array_key_exists('remember_me_days', $input)) {
+        $days = (int)$input['remember_me_days'];
+        if ($days < 1 || $days > 365) json_error('Remember me days must be between 1 and 365');
+        db_exec($db, 'INSERT INTO settings (key, value) VALUES (:k, :v) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [
+            ':k' => 'remember_me_days', ':v' => (string)$days,
+        ]);
+    }
+    json_ok(['settings' => [
+        'remember_me_days' => (int)(get_setting($db, 'remember_me_days') ?: 30),
+    ]]);
 }
 
 // ══════════════════════════════════════════════════════════

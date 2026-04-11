@@ -35,6 +35,13 @@
         <label for="login-password">Password</label>
         <input id="login-password" type="password" autocomplete="current-password">
       </div>
+      <div class="form-group">
+        <label class="toggle-label">
+          <input type="checkbox" id="login-remember-me" checked>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span>Remember me</span>
+        </label>
+      </div>
       <div class="form-error" id="login-error"></div>
       <button class="btn btn-primary" id="login-btn">Sign in</button>
       <p class="modal-switch"><a id="to-forgot">Forgot password?</a></p>
@@ -408,11 +415,22 @@
     <div id="view-admin" class="view" style="display:none">
       <div class="view-header">
         <div class="view-title">Admin</div>
-        <div class="feed-tabs">
-          <button class="feed-tab active">Users</button>
+        <div class="feed-tabs" id="admin-tabs">
+          <button class="feed-tab active" data-tab="users">Users</button>
+          <button class="feed-tab" data-tab="settings">Settings</button>
         </div>
       </div>
       <div id="admin-user-list"></div>
+      <div id="admin-settings-panel" style="display:none; padding:24px 16px; max-width:480px;">
+        <h3 style="margin:0 0 20px; font-size:16px;">Site Settings</h3>
+        <div class="form-group">
+          <label for="admin-rmb-days">Remember me duration (days)</label>
+          <input id="admin-rmb-days" type="number" min="1" max="365" value="30" style="width:120px;">
+          <div class="field-hint">How long a "remember me" session lasts after login.</div>
+        </div>
+        <div class="form-error" id="admin-settings-error"></div>
+        <button class="btn btn-primary" id="admin-settings-save">Save settings</button>
+      </div>
     </div>
 
   </main>
