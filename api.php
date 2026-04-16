@@ -10,7 +10,7 @@ const UPLOADS_URL          = '/uploads/avatars/';
 const POSTS_UPLOADS_DIR    = __DIR__ . '/uploads/posts/';
 const POSTS_UPLOADS_URL    = '/uploads/posts/';
 const MAX_POST_LENGTH      = 500;
-const SCHEMA_VERSION       = 8;
+const SCHEMA_VERSION       = 9;
 
 // ── Database ──────────────────────────────────────────────
 
@@ -22,14 +22,19 @@ function get_db(): SQLite3 {
     $db->exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
     $current = $db->querySingle('SELECT version FROM schema_version LIMIT 1');
     if ((int)$current !== SCHEMA_VERSION) {
+        $db->exec('PRAGMA foreign_keys=OFF;');
         $db->exec('
+            DROP TABLE IF EXISTS rate_limits;
             DROP TABLE IF EXISTS notifications;
             DROP TABLE IF EXISTS liked_posts;
             DROP TABLE IF EXISTS posts;
             DROP TABLE IF EXISTS follows;
             DROP TABLE IF EXISTS users;
+            DROP TABLE IF EXISTS remember_tokens;
+            DROP TABLE IF EXISTS settings;
             DELETE FROM schema_version;
         ');
+        $db->exec('PRAGMA foreign_keys=ON;');
         $db->exec('INSERT INTO schema_version VALUES (' . SCHEMA_VERSION . ')');
     }
 
@@ -90,12 +95,58 @@ function get_db(): SQLite3 {
             key   TEXT NOT NULL PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS rate_limits (
+            key     TEXT NOT NULL PRIMARY KEY,
+            hits    INTEGER NOT NULL,
+            expires INTEGER NOT NULL
+        );
     ');
     return $db;
 }
 
 // ── Helpers ───────────────────────────────────────────────
 
+function get_base_url(): string {
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    // In a real production app, this should be a hardcoded constant.
+    return "$protocol://$host";
+}
+
+function check_rate_limit(SQLite3 $db, string $key, int $limit, int $window_seconds): void {
+    $now = time();
+    db_exec($db, 'DELETE FROM rate_limits WHERE expires < :now', [':now' => $now]);
+    
+    $row = db_query_single($db, 'SELECT hits, expires FROM rate_limits WHERE key=:k', [':k' => $key], true);
+    if ($row) {
+        if ($row['hits'] >= $limit) {
+            json_error('Too many requests. Please try again later.', 429);
+        }
+        db_exec($db, 'UPDATE rate_limits SET hits = hits + 1 WHERE key=:k', [':k' => $key]);
+    } else {
+        db_exec($db, 'INSERT INTO rate_limits (key, hits, expires) VALUES (:k, 1, :e)', [
+            ':k' => $key,
+            ':e' => $now + $window_seconds
+        ]);
+    }
+}
+
+function get_csrf_token(): string {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function validate_csrf(): void {
+    $method = $_SERVER['REQUEST_METHOD'];
+    if (in_array($method, ['POST', 'PUT', 'DELETE', 'PATCH'])) {
+        $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+        if (!$token || $token !== ($_SESSION['csrf_token'] ?? '')) {
+            json_error('Invalid CSRF token', 403);
+        }
+    }
+}
 function get_setting(SQLite3 $db, string $key, string $default = ''): string {
     return (string)(db_query_single($db, 'SELECT value FROM settings WHERE key=:k', [':k' => $key]) ?? $default);
 }
@@ -193,6 +244,7 @@ function send_mail(string $to, string $subject, string $text, string $html): boo
 }
 
 function mail_html_wrap(string $heading, string $body_html, string $cta_text, string $cta_url): string {
+    $baseUrl = get_base_url();
     return <<<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -208,7 +260,7 @@ function mail_html_wrap(string $heading, string $body_html, string $cta_text, st
       <!-- Header -->
       <tr>
         <td style="background:#ffffff;padding:28px 40px;text-align:center;border-bottom:1px solid #e5e7eb;">
-          <img src="http://$_SERVER[HTTP_HOST]/logo.png" alt="Magpie" width="40" height="40" style="vertical-align:middle;margin-right:10px;"><span style="font-size:22px;font-weight:700;color:#0f1419;letter-spacing:0.5px;vertical-align:middle;">Magpie</span>
+          <img src="$baseUrl/logo.png" alt="Magpie" width="40" height="40" style="vertical-align:middle;margin-right:10px;"><span style="font-size:22px;font-weight:700;color:#0f1419;letter-spacing:0.5px;vertical-align:middle;">Magpie</span>
         </td>
       </tr>
       <!-- Body -->
@@ -414,6 +466,7 @@ $id        = is_numeric($sub1) ? (int)$sub1 : null;
 $target_id = is_numeric($sub2) ? (int)$sub2 : null;
 
 $db = get_db();
+validate_csrf();
 
 // Auto-login via remember-me cookie
 if (!isset($_SESSION['user_id']) && !empty($_COOKIE['magpie_rmb'])) {
@@ -435,12 +488,13 @@ if (!isset($_SESSION['user_id']) && !empty($_COOKIE['magpie_rmb'])) {
 
 if ($method === 'GET' && $resource === 'auth' && $sub1 === 'me') {
     $uid = current_user_id();
-    if (!$uid) json_ok(['user' => null]);
+    if (!$uid) json_ok(['user' => null, 'csrf_token' => get_csrf_token()]);
     $u = db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true);
-    json_ok(['user' => $u ? format_user($u) : null]);
+    json_ok(['user' => $u ? format_user($u) : null, 'csrf_token' => get_csrf_token()]);
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
+    check_rate_limit($db, 'signup_' . $_SERVER['REMOTE_ADDR'], 5, 3600); // 5 per hour
     $input    = json_decode(file_get_contents('php://input'), true);
     $username = trim($input['username'] ?? '');
     $email    = trim($input['email'] ?? '');
@@ -473,9 +527,10 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
     ]);
 
     $uid = $db->lastInsertRowID();
+    session_regenerate_id(true);
     $_SESSION['user_id'] = $uid;
 
-    $url = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
+    $url = get_base_url() . "/#verify=" . $v_token;
     $text = "Hello $username,\n\nThank you for joining Magpie! Please verify your email address by visiting the link below:\n\n$url\n\nIf you did not create an account, you can safely ignore this message.";
     $html = mail_html_wrap(
         "Confirm your email address",
@@ -485,10 +540,14 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
     );
     send_mail($email, "Verify your Magpie account", $text, $html);
 
-    json_ok(['user' => format_user(db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true))]);
+    json_ok([
+        'user'       => format_user(db_query_single($db, 'SELECT * FROM users WHERE id=:id', [':id' => $uid], true)),
+        'csrf_token' => get_csrf_token()
+    ]);
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
+    check_rate_limit($db, 'login_' . $_SERVER['REMOTE_ADDR'], 10, 600); // 10 per 10 mins
     $input    = json_decode(file_get_contents('php://input'), true);
     $username = trim($input['username'] ?? '');
     $password = $input['password'] ?? '';
@@ -499,6 +558,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
     if ($u['disabled'])
         json_error('Your account has been disabled', 403);
 
+    session_regenerate_id(true);
     $_SESSION['user_id'] = $u['id'];
 
     if (!empty($input['remember_me'])) {
@@ -516,7 +576,10 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'login') {
         ]);
     }
 
-    json_ok(['user' => format_user($u)]);
+    json_ok([
+        'user'       => format_user($u),
+        'csrf_token' => get_csrf_token()
+    ]);
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'logout') {
@@ -525,7 +588,9 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'logout') {
         setcookie('magpie_rmb', '', ['expires' => time() - 3600, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
     }
     session_destroy();
-    json_ok(['ok' => true]);
+    session_start();
+    session_regenerate_id(true);
+    json_ok(['ok' => true, 'csrf_token' => get_csrf_token()]);
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'verify-email') {
@@ -541,6 +606,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'verify-email') {
 }
 
 if ($method === 'POST' && $resource === 'auth' && $sub1 === 'forgot-password') {
+    check_rate_limit($db, 'forgot_' . $_SERVER['REMOTE_ADDR'], 5, 3600); // 5 per hour
     $input = json_decode(file_get_contents('php://input'), true);
     $email = trim($input['email'] ?? '');
     if (!$email) json_error('Email required');
@@ -555,7 +621,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'forgot-password') {
             ':id' => $u['id']
         ]);
         
-        $url = "http://" . $_SERVER['HTTP_HOST'] . "/#reset=" . $token;
+        $url = get_base_url() . "/#reset=" . $token;
         $uname = $u['username'];
         $text = "Hello $uname,\n\nWe received a request to reset the password for your Magpie account. Click the link below to choose a new password:\n\n$url\n\nThis link expires in 1 hour. If you did not request a password reset, you can safely ignore this message.";
         $html = mail_html_wrap(
@@ -603,7 +669,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'resend-verification
         db_exec($db, 'UPDATE users SET verification_token=:v WHERE id=:id', [':v' => $v_token, ':id' => $uid]);
     }
 
-    $url = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
+    $url = get_base_url() . "/#verify=" . $v_token;
     $uname = $u['username'];
     $text = "Hello $uname,\n\nPlease verify your Magpie email address by visiting the link below:\n\n$url\n\nIf you did not request this, you can safely ignore this message.";
     $html = mail_html_wrap(
@@ -702,7 +768,7 @@ if ($method === 'PUT' && $resource === 'users' && $sub1 === 'me') {
             ':id' => $uid
         ]);
         $uname = db_query_single($db, 'SELECT username FROM users WHERE id=:id', [':id' => $uid]);
-        $url   = "http://" . $_SERVER['HTTP_HOST'] . "/#verify=" . $v_token;
+        $url   = get_base_url() . "/#verify=" . $v_token;
         $text  = "Hello $uname,\n\nPlease verify your new Magpie email address by visiting the link below:\n\n$url\n\nIf you did not request this change, please contact support.";
         $html  = mail_html_wrap(
             "Confirm your new email address",

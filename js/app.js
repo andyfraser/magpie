@@ -140,6 +140,7 @@ const lightboxCounter = document.getElementById('lightbox-counter');
 
 // ── State ─────────────────────────────────────────────────
 let currentUser  = null;
+let csrfToken    = null;
 let currentPage  = 1;
 let totalPages   = 1;
 let isSubmitting = false;
@@ -161,6 +162,18 @@ let lightboxIndex  = 0;
 
 // ── Boot ──────────────────────────────────────────────────
 (async () => {
+  // Always fetch session info and CSRF token first
+  try {
+    const data = await apiFetch('auth/me');
+    if (data.csrf_token) csrfToken = data.csrf_token;
+    if (data.user) {
+      onLogin(data.user);
+    }
+  } catch (e) {
+    console.error('Failed to fetch session:', e);
+    showToast('Failed to connect to Magpie. Please refresh the page.', true);
+  }
+
   // Handle verify/reset tokens in URL hash
   const hash = window.location.hash.substring(1);
   const params = new URLSearchParams(hash);
@@ -175,6 +188,10 @@ let lightboxIndex  = 0;
         body: JSON.stringify({ token: verifyToken }),
       });
       showToast('Email verified! You can now post.');
+      if (currentUser) {
+        currentUser.email_verified = true;
+        verifyBanner.style.display = 'none';
+      }
       window.location.hash = '';
     } catch (e) {
       showToast(e.message, true);
@@ -185,16 +202,10 @@ let lightboxIndex  = 0;
     resetBtn.dataset.token = resetToken;
   }
 
-  try {
-    const data = await apiFetch('auth/me');
-    if (data.user) {
-      onLogin(data.user);
-    } else if (!resetToken) {
-      showAuthModal('login');
-    }
-  } catch {
-    if (!resetToken) showAuthModal('login');
+  if (!currentUser && !resetToken) {
+    showAuthModal('login');
   }
+
   loadPosts(1, true);
 })();
 
@@ -212,7 +223,12 @@ document.getElementById('feed-tabs').addEventListener('click', e => {
 
 // ── API helper ────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {
-  const res  = await fetch('api.php/' + path, { credentials: 'same-origin', ...opts });
+  const method = (opts.method || 'GET').toUpperCase();
+  const headers = { ...opts.headers };
+  if (csrfToken && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+    headers['X-CSRF-Token'] = csrfToken;
+  }
+  const res  = await fetch('api.php/' + path, { ...opts, headers });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
@@ -358,6 +374,7 @@ loginBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ username, password, remember_me: loginRememberMe.checked }),
     });
+    if (data.csrf_token) csrfToken = data.csrf_token;
     onLogin(data.user);
     loadPosts(1, true);
   } catch (e) {
@@ -382,6 +399,7 @@ signupBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ username, email, password }),
     });
+    if (data.csrf_token) csrfToken = data.csrf_token;
     onLogin(data.user);
     loadPosts(1, true);
   } catch (e) {
@@ -435,7 +453,13 @@ resetBtn.addEventListener('click', async () => {
 });
 
 logoutBtn.addEventListener('click', async () => {
-  await apiFetch('auth/logout', { method: 'POST' }).catch(() => {});
+  try {
+    const data = await apiFetch('auth/logout', { method: 'POST' });
+    if (data.csrf_token) csrfToken = data.csrf_token;
+  } catch (e) {
+    console.warn('Logout API failed', e);
+    csrfToken = null; // Fallback
+  }
   currentUser = null;
   currentFeed = 'for-you';
   document.querySelectorAll('.feed-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'for-you'));
@@ -459,8 +483,9 @@ logoutBtn.addEventListener('click', async () => {
 });
 
 // ── On login ──────────────────────────────────────────────
-function onLogin(user) {
+function onLogin(user, token = null) {
   currentUser = user;
+  if (token) csrfToken = token;
   hideAuthModal();
   updateAuthUI(user);
   composeEl.style.display        = '';
@@ -489,6 +514,7 @@ resendVerifyBtn.addEventListener('click', async () => {
 });
 
 function updateAuthUI(user) {
+  if (!user) return;
   sidebarDN.textContent     = user.display_name || user.username;
   sidebarHandle.textContent = '@' + user.username;
   setAvatarEl(sidebarAvatar, user);
@@ -496,8 +522,10 @@ function updateAuthUI(user) {
   if (currentUser) {
     setAvatarEl(composeModalAvatar, currentUser);
   }
-  document.querySelectorAll(`.post[data-username="${CSS.escape(user.username)}"] .avatar`)
-    .forEach(el => setAvatarEl(el, user));
+  if (user.username) {
+    document.querySelectorAll(`.post[data-username="${CSS.escape(user.username)}"] .avatar`)
+      .forEach(el => setAvatarEl(el, user));
+  }
 }
 
 function setAvatarEl(el, user) {
@@ -906,9 +934,13 @@ async function toggleRepost(id, postEl) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
     const btn = postEl.querySelector('.repost-btn');
-    btn.classList.toggle('reposted', post.reposted);
-    btn.innerHTML = `${repostSvg()}<span class="repost-count">${post.repost_count > 0 ? post.repost_count : ''}</span>`;
+    if (btn) {
+      btn.classList.toggle('reposted', post.reposted);
+      btn.innerHTML = `${repostSvg()}<span class="repost-count">${post.repost_count > 0 ? post.repost_count : ''}</span>`;
+    }
     showToast(post.reposted ? 'Reposted' : 'Repost removed');
+    if (!threadModal.classList.contains('hidden')) refreshThread();
+    loadPosts(1, true);
   } catch (e) { showToast(e.message, true); }
 }
 
@@ -1356,6 +1388,7 @@ saveProfileBtn.addEventListener('click', async () => {
         bio:          pfBio.value.trim(),
       }),
     });
+    if (data.csrf_token) csrfToken = data.csrf_token;
     currentUser = data.user;
     updateAuthUI(data.user);
     verifyBanner.style.display = data.user.email_verified ? 'none' : 'block';
@@ -1667,8 +1700,14 @@ lightboxNext.addEventListener('click', e => { e.stopPropagation(); lightboxNav(1
 
 // ── Utilities ─────────────────────────────────────────────
 function esc(str) {
-  return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  if (typeof str !== 'string') return str;
+  const s = str
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
+  return /^\s*javascript:/i.test(s) ? '#invalid' : s;
 }
 
 function timeAgo(ts) {

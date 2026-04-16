@@ -60,6 +60,16 @@ PHP 8.1 or higher with the sqlite3 extension.
 
 The first person to register is automatically granted administrator privileges.
 
+## Security Considerations
+
+Magpie is designed as a minimalist demo project. While it includes several security features, there are important considerations for any production use:
+
+- **Database Protection:** The SQLite database (`magpie.db`) and other configuration files are located in the web root. In a production environment, you MUST configure your web server (Apache, Nginx, etc.) to deny access to `.db`, `.md`, and `.gitignore` files, or move the database outside of the web-accessible directory.
+- **CSRF & Rate Limiting:** The app includes basic CSRF protection and rate limiting for authentication endpoints.
+- **Session Security:** Session IDs are regenerated upon login to prevent session fixation.
+- **Email Links:** Verification and reset links use the `Host` header by default. For high-security production use, the base URL should be hardcoded in `api.php`.
+- **Password Policy:** There is currently no complex password policy beyond a 6-character minimum.
+
 ## Project Structure
 
 - `index.php` — HTML shell; serves the SPA markup and all modals

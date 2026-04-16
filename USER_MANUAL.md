@@ -93,3 +93,13 @@ If you are an administrator, you have access to additional management tools:
 - **Database Issues:** If you see errors related to the database, ensure the `magpie.db` file is writable by the PHP process.
 - **Email Not Sending:** If you are running Magpie locally and not receiving emails, ensure your `php.ini` is configured to use a mail server or a tool like [Mailpit](https://github.com/axllent/mailpit).
 - **Updates Not Appearing:** Magpie refreshes the feed automatically every 2 minutes. You can manually refresh by clicking the "Magpie" logo or switching tabs.
+
+---
+
+## 7. Security Notes
+
+Magpie is a minimalist demo application. For those hosting it, please be aware:
+
+- **Server Configuration:** The application's database and technical files are in the web-accessible directory. Ensure your web server is configured to block direct access to `.db`, `.md`, and `.gitignore` files.
+- **CSRF & Rates:** The system includes basic protections against Cross-Site Request Forgery and automated brute-force attempts on login.
+- **Privacy:** As a public demo, consider all data posted to be visible and ensure your server environment is secure.
