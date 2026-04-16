@@ -9,11 +9,12 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 
 ## Features
 
-- **Micro-blogging:** Share thoughts in posts up to 500 characters.
+- **Micro-blogging:** Share thoughts in posts with up to 500 characters and 4 images (JPEG, PNG, GIF, WebP — max 5 MB).
 - **Replies & Threads:** Reply to any post; thread view shows the full ancestor chain and replies.
 - **Quote Posts:** Quote-repost with added commentary.
 - **Likes:** Like and unlike posts; view all your liked posts in a dedicated feed.
 - **Follow System:** Follow users; filter your home feed to show only people you follow.
+- **Authentication:** Secure sign-in with a "Remember Me" option (configurable duration).
 - **Email Verification:** Verify your email address (required before you can post).
 - **Password Reset:** Recover access to your account with secure reset links.
 - **Notifications:** Get notified when someone replies to, quotes, or follows you; unread badge in the sidebar.
@@ -68,6 +69,7 @@ The first person to register is automatically granted administrator privileges.
 - `logo.png` — App logo (used as favicon)
 - `uploads/avatars/` — User avatar storage (created automatically)
 - `uploads/avatars/presets/` — Built-in SVG preset avatars
+- `uploads/posts/` — Post image storage (created automatically)
 - `magpie.db` — SQLite database (auto-generated on first request)
 
 ## License

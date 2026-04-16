@@ -643,13 +643,17 @@ function renderPost(post, opts = {}) {
         ${editedLabel}
       </div>
       ${replyingTo}
-      <div class="post-body post-body-clickable">${esc(post.body)}</div>
+      ${post.body ? `<div class="post-body post-body-clickable">${esc(post.body)}</div>` : ''}
       ${imageHtml}
       ${quoteCard}
       <div class="post-actions">
         <button class="action-btn reply-btn" data-id="${post.id}" title="Reply">
           ${replySvg()}
           <span class="reply-count">${replyCountLabel}</span>
+        </button>
+        <button class="action-btn repost-btn ${post.reposted ? 'reposted' : ''}" data-id="${post.id}" title="Repost">
+          ${repostSvg()}
+          <span class="repost-count">${post.repost_count > 0 ? post.repost_count : ''}</span>
         </button>
         <button class="action-btn quote-btn" data-id="${post.id}" title="Quote">
           ${quoteSvg()}
@@ -665,7 +669,7 @@ function renderPost(post, opts = {}) {
     </div>`;
 
   // Click post body/meta to open thread (not action buttons)
-  div.querySelector('.post-body-clickable').addEventListener('click', () => openThread(post.id));
+  div.querySelector('.post-body-clickable')?.addEventListener('click', () => openThread(post.id));
   div.querySelector('.post-meta').addEventListener('click', () => openThread(post.id));
 
   // Photo grid lightbox
@@ -680,6 +684,12 @@ function renderPost(post, opts = {}) {
     e.stopPropagation();
     if (!currentUser) { showToast('Sign in to reply', true); return; }
     openComposeModal('reply', post);
+  });
+
+  div.querySelector('.repost-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    if (!currentUser) { showToast('Sign in to repost', true); return; }
+    toggleRepost(post.id, div);
   });
 
   div.querySelector('.quote-btn').addEventListener('click', e => {
@@ -887,6 +897,18 @@ async function toggleLike(id, postEl) {
     const btn = postEl.querySelector('.like-btn');
     btn.classList.toggle('liked', post.liked);
     btn.innerHTML = `${heartSvg(post.liked)}<span class="like-count">${post.likes > 0 ? post.likes : ''}</span>`;
+  } catch (e) { showToast(e.message, true); }
+}
+
+async function toggleRepost(id, postEl) {
+  try {
+    const post = await apiFetch(`posts/${id}/repost`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const btn = postEl.querySelector('.repost-btn');
+    btn.classList.toggle('reposted', post.reposted);
+    btn.innerHTML = `${repostSvg()}<span class="repost-count">${post.repost_count > 0 ? post.repost_count : ''}</span>`;
+    showToast(post.reposted ? 'Reposted' : 'Repost removed');
   } catch (e) { showToast(e.message, true); }
 }
 
@@ -1211,6 +1233,9 @@ function renderNotifications(notifs) {
     } else if (n.type === 'quote') {
       icon = `<span class="notif-icon notif-icon-quote">${quoteSvg()}</span>`;
       text = `<strong>${esc(actor.display_name)}</strong> quoted your post`;
+    } else if (n.type === 'repost') {
+      icon = `<span class="notif-icon notif-icon-repost">${repostSvg()}</span>`;
+      text = `<strong>${esc(actor.display_name)}</strong> reposted your post`;
     }
 
     const snippet = n.post_body ? `<div class="notif-snippet">${esc(n.post_body)}</div>` : '';
@@ -1688,8 +1713,12 @@ function replySvg() {
   return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 }
 
-function quoteSvg() {
+function repostSvg() {
   return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
+}
+
+function quoteSvg() {
+  return `<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:1.75"><path d="M3 21l1-6 7-7 5 5-7 7-6 1zm4.5-8.5l4 4"/><path d="M13 3l5 5 2-2-5-5-2 2z"/><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/></svg>`;
 }
 
 function followNotifSvg() {

@@ -11,6 +11,7 @@
   --text:      #0f1419;
   --muted:     #536471;
   --like:      #f91880;
+  --repost:    #00ba7c;
   --radius:    16px;
 }
 
@@ -331,6 +332,8 @@ a { color: inherit; text-decoration: none; }
   transition: color 0.15s, background 0.15s;
 }
 .action-btn:hover              { color: var(--accent);  background: rgba(29,155,240,0.1); }
+.action-btn.repost-btn:hover   { color: var(--repost);  background: rgba(0,186,124,0.1); }
+.action-btn.repost-btn.reposted { color: var(--repost); }
 .action-btn.like-btn:hover     { color: var(--like);    background: rgba(249,24,128,0.1); }
 .action-btn.like-btn.liked     { color: var(--like); }
 .action-btn.delete-btn:hover   { color: var(--danger);  background: rgba(244,33,46,0.1); }
@@ -923,6 +926,7 @@ a { color: inherit; text-decoration: none; }
 .notif-icon-follow { background: rgba(29,155,240,0.12); color: var(--accent); }
 .notif-icon-reply  { background: rgba(29,155,240,0.12); color: var(--accent); }
 .notif-icon-quote  { background: rgba(120,86,255,0.12); color: #7856ff; }
+.notif-icon-repost { background: rgba(0,186,124,0.12); color: var(--repost); }
 
 .notif-body { flex: 1; min-width: 0; }
 

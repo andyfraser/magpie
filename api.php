@@ -257,12 +257,15 @@ function post_select_cols(string $alias, ?int $uid): string {
                        : ', 0 AS liked_flag';
     $follow_col = $uid ? ", CASE WHEN f.follower_id IS NOT NULL THEN 1 ELSE 0 END AS following"
                        : ', 0 AS following';
+    $reposted_col = $uid ? ", CASE WHEN (SELECT 1 FROM posts r WHERE r.quote_id=$alias.id AND r.user_id=$uid AND r.body='' AND r.image IS NULL LIMIT 1) IS NOT NULL THEN 1 ELSE 0 END AS reposted_flag"
+                         : ', 0 AS reposted_flag';
     $a = $alias;
     return "
         $a.*,
         COALESCE(u.display_name, u.username) AS display_name,
         u.avatar AS user_avatar,
         (SELECT COUNT(*) FROM posts r WHERE r.parent_id = $a.id) AS reply_count,
+        (SELECT COUNT(*) FROM posts r WHERE r.quote_id = $a.id AND r.body='' AND r.image IS NULL) AS repost_count,
         pu.username AS parent_username,
         COALESCE(pu.display_name, pu.username) AS parent_display_name,
         qp.id AS quote_post_id,
@@ -271,7 +274,7 @@ function post_select_cols(string $alias, ?int $uid): string {
         qp.created_at AS quote_created_at,
         COALESCE(qu.display_name, qu.username) AS quote_display_name,
         qu.avatar AS quote_avatar_file
-        $liked_col $follow_col
+        $liked_col $follow_col $reposted_col
     ";
 }
 
@@ -290,17 +293,19 @@ function post_join_sql(string $alias, ?int $uid): string {
 }
 
 function format_post_row(array $row, ?int $uid): array {
-    $row['id']          = (int)$row['id'];
-    $row['user_id']     = (int)$row['user_id'];
-    $row['likes']       = (int)$row['likes'];
-    $row['created_at']  = (int)$row['created_at'];
-    $row['parent_id']   = isset($row['parent_id']) && $row['parent_id'] !== null ? (int)$row['parent_id'] : null;
-    $row['quote_id']    = isset($row['quote_id'])  && $row['quote_id']  !== null ? (int)$row['quote_id']  : null;
-    $row['reply_count'] = (int)($row['reply_count'] ?? 0);
-    $row['liked']       = (bool)($row['liked_flag'] ?? false);
-    $row['own']         = $uid ? ((int)$row['user_id'] === $uid) : false;
-    $row['following']   = (bool)($row['following'] ?? false);
-    $row['avatar_url']  = !empty($row['user_avatar']) ? UPLOADS_URL . $row['user_avatar'] : null;
+    $row['id']           = (int)$row['id'];
+    $row['user_id']      = (int)$row['user_id'];
+    $row['likes']        = (int)$row['likes'];
+    $row['created_at']   = (int)$row['created_at'];
+    $row['parent_id']    = isset($row['parent_id']) && $row['parent_id'] !== null ? (int)$row['parent_id'] : null;
+    $row['quote_id']     = isset($row['quote_id'])  && $row['quote_id']  !== null ? (int)$row['quote_id']  : null;
+    $row['reply_count']  = (int)($row['reply_count']  ?? 0);
+    $row['repost_count'] = (int)($row['repost_count'] ?? 0);
+    $row['liked']        = (bool)($row['liked_flag']  ?? false);
+    $row['reposted']     = (bool)($row['reposted_flag'] ?? false);
+    $row['own']          = $uid ? ((int)$row['user_id'] === $uid) : false;
+    $row['following']    = (bool)($row['following'] ?? false);
+    $row['avatar_url']   = !empty($row['user_avatar']) ? UPLOADS_URL . $row['user_avatar'] : null;
     $image_urls = [];
     if (!empty($row['image'])) {
         $decoded = json_decode($row['image'], true);
@@ -329,7 +334,7 @@ function format_post_row(array $row, ?int $uid): array {
         $row['quote'] = null;
     }
 
-    unset($row['user_avatar'], $row['liked_flag'], $row['image'],
+    unset($row['user_avatar'], $row['liked_flag'], $row['reposted_flag'], $row['image'],
           $row['quote_post_id'], $row['quote_body'], $row['quote_username'],
           $row['quote_created_at'], $row['quote_display_name'], $row['quote_avatar_file']);
 
@@ -894,7 +899,7 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
     }
     $image_json = !empty($uploaded_filenames) ? json_encode($uploaded_filenames) : null;
 
-    if ($body === '' && empty($uploaded_filenames)) json_error('Post body is required');
+    if ($body === '' && empty($uploaded_filenames) && !$quote_id) json_error('Post body is required');
     if (mb_strlen($body) > MAX_POST_LENGTH) json_error('Post exceeds ' . MAX_POST_LENGTH . ' character limit');
 
     if ($parent_id) {
@@ -936,10 +941,11 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
     if ($quote_id && isset($quoted)) {
         $target_uid = (int)$quoted['user_id'];
         if ($target_uid !== $uid) {
+            $type = ($body === '' && empty($uploaded_filenames)) ? 'repost' : 'quote';
             db_exec($db, 'INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,:t,:p,:ts)', [
                 ':u'  => $target_uid,
                 ':a'  => $uid,
-                ':t'  => 'quote',
+                ':t'  => $type,
                 ':p'  => $nid,
                 ':ts' => time()
             ]);
@@ -948,6 +954,45 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
 
     $post = fetch_post($db, $nid, $uid);
     json_ok($post);
+}
+
+if ($method === 'POST' && $resource === 'posts' && $id && $sub2 === 'repost') {
+    $uid = require_auth();
+    $u   = db_query_single($db, 'SELECT username, disabled, email_verified FROM users WHERE id=:id', [':id' => $uid], true);
+    if ($u['disabled']) json_error('Your account has been disabled', 403);
+    if (!$u['email_verified']) json_error('Please verify your email address to post', 403);
+
+    $original = db_query_single($db, 'SELECT id, user_id FROM posts WHERE id=:id', [':id' => $id], true);
+    if (!$original) json_error('Post not found', 404);
+
+    // Look for existing pure repost
+    $existing = db_query_single($db, "SELECT id FROM posts WHERE user_id=:u AND quote_id=:q AND body='' AND image IS NULL", [
+        ':u' => $uid, ':q' => $id
+    ]);
+
+    if ($existing) {
+        // Un-repost
+        db_exec($db, 'DELETE FROM notifications WHERE actor_id=:u AND post_id=:p AND type=\'repost\'', [':u' => $uid, ':p' => $existing]);
+        db_exec($db, 'DELETE FROM posts WHERE id=:id', [':id' => $existing]);
+    } else {
+        // Repost
+        db_exec($db, 'INSERT INTO posts (user_id, username, body, image, quote_id, created_at) VALUES (:u,:n,\'\',NULL,:q,:t)', [
+            ':u' => $uid, ':n' => $u['username'], ':q' => $id, ':t' => time()
+        ]);
+        $nid = $db->lastInsertRowID();
+        
+        $target_uid = (int)$original['user_id'];
+        if ($target_uid !== $uid) {
+            db_exec($db, 'INSERT INTO notifications (user_id,actor_id,type,post_id,created_at) VALUES (:u,:a,\'repost\',:p,:ts)', [
+                ':u'  => $target_uid,
+                ':a'  => $uid,
+                ':p'  => $nid,
+                ':ts' => time()
+            ]);
+        }
+    }
+
+    json_ok(fetch_post($db, $id, $uid));
 }
 
 if ($method === 'POST' && $resource === 'posts' && $id && $sub2 === 'like') {
