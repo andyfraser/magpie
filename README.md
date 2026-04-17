@@ -9,7 +9,12 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 
 ## Features
 
-- **Micro-blogging:** Share thoughts in posts with up to 500 characters and 4 images (JPEG, PNG, GIF, WebP — max 5 MB).
+- **Micro-blogging:** Share thoughts in posts with up to 500 characters and 4 images.
+- **Rich Text:** Automatically parses URLs, `@mentions`, and `#hashtags` into clickable links.
+- **Media Optimization:** Client-side image compression (JPEG/WebP) reduces upload bandwidth and storage usage.
+- **Infinite Scroll:** Seamlessly browse feeds with automatic loading as you scroll.
+- **Dark Mode:** Support for Light and Dark themes, persisted via `localStorage`.
+- **Real-time Updates:** Instant notification badges and new post alerts powered by **Server-Sent Events (SSE)**.
 - **Replies & Threads:** Reply to any post; thread view shows the full ancestor chain and replies.
 - **Quote Posts:** Quote-repost with added commentary.
 - **Likes:** Like and unlike posts; view all your liked posts in a dedicated feed.
@@ -17,9 +22,8 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 - **Authentication:** Secure sign-in with a "Remember Me" option (configurable duration).
 - **Email Verification:** Verify your email address (required before you can post).
 - **Password Reset:** Recover access to your account with secure reset links.
-- **Notifications:** Get notified when someone replies to, quotes, or follows you; unread badge in the sidebar.
 - **User Discovery:** Search users by username or display name.
-- **Custom Profiles:** Display name, bio, and avatar (JPEG, PNG, GIF, WebP — max 2 MB). Choose from built-in preset avatars or upload your own.
+- **Custom Profiles:** Display name, bio, and avatar. Choose from built-in preset avatars or upload your own.
 - **Account Deletion:** Users can permanently delete their own account and all associated data.
 - **Admin Panel:** Edit user profiles, toggle admin privileges, disable accounts, and delete users.
 - **Responsive:** Works on mobile and desktop.
@@ -28,7 +32,7 @@ Magpie is a minimalist, Twitter-like social platform designed as a Single Page A
 
 - **Backend:** PHP 8.1+ (no framework)
 - **Database:** SQLite3 (schema auto-created and versioned)
-- **Frontend:** Vanilla JavaScript (ES6+, async/await, fetch)
+- **Frontend:** Vanilla JavaScript (ES6+, async/await, fetch, EventSource)
 - **Styling:** CSS3 with CSS Variables
 
 ## Getting Started
@@ -37,7 +41,7 @@ No build steps, no `npm install`, no `composer install`.
 
 ### Prerequisites
 
-PHP 8.1 or higher with the sqlite3 extension.
+PHP 8.1 or higher with the `sqlite3` extension.
 
 ### Running the App
 
@@ -52,10 +56,11 @@ PHP 8.1 or higher with the sqlite3 extension.
    # For Apple Silicon (M1/M2/M3) Macs
    sendmail_path = /opt/homebrew/bin/mailpit sendmail
    ```
-3. Start the PHP built-in server:
+3. Start the PHP built-in server with **multi-threaded workers** (required for SSE):
    ```bash
-   php -S localhost:8000
+   PHP_CLI_SERVER_WORKERS=5 php -S localhost:8000
    ```
+   *Note: SSE requires multiple workers to prevent the long-lived stream from blocking other requests.*
 4. Open `http://localhost:8000` in your browser.
 
 The first person to register is automatically granted administrator privileges.

@@ -892,9 +892,20 @@ if ($method === 'GET' && $resource === 'posts') {
     $uid    = current_user_id();
 
     $feed       = $_GET['feed'] ?? '';
+    $q          = trim($_GET['q'] ?? '');
+    $username   = trim($_GET['username'] ?? '');
     $liked_join = '';
     $params     = [':lim' => $limit, ':off' => $offset];
     $conditions = [];
+
+    if ($q !== '') {
+        $conditions[] = "p.body LIKE :q";
+        $params[':q'] = "%$q%";
+    }
+    if ($username !== '') {
+        $conditions[] = "p.username = :uname";
+        $params[':uname'] = $username;
+    }
 
     if ($uid) {
         $params[':uid'] = $uid;
@@ -1325,6 +1336,55 @@ if ($method === 'PATCH' && $resource === 'admin' && $sub1 === 'settings') {
 // ══════════════════════════════════════════════════════════
 // FOLLOWS
 // ══════════════════════════════════════════════════════════
+
+if ($method === 'GET' && $resource === 'stream') {
+    $uid = current_user_id();
+    if (!$uid) {
+        header('HTTP/1.1 401 Unauthorized');
+        exit;
+    }
+
+    header('Content-Type: text/event-stream');
+    header('Cache-Control: no-cache');
+    header('Connection: keep-alive');
+    header('X-Accel-Buffering: no');
+
+    set_time_limit(0);
+
+    session_write_close();
+
+    $db = get_db();
+    $last_notif_id = (int)db_query_single($db, 'SELECT MAX(id) FROM notifications WHERE user_id=:uid', [':uid' => $uid]) ?: 0;
+    $last_post_id  = (int)db_query_single($db, 'SELECT MAX(id) FROM posts') ?: 0;
+
+    while (true) {
+        if (connection_aborted()) break;
+
+        // Check for new notifications
+        $latest_notif = (int)db_query_single($db, 'SELECT MAX(id) FROM notifications WHERE user_id=:uid', [':uid' => $uid]) ?: 0;
+        if ($latest_notif > $last_notif_id) {
+            $unread = (int)db_query_single($db, 'SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read=0', [':uid' => $uid]);
+            echo "data: " . json_encode(['type' => 'notification', 'unread' => $unread]) . "\n\n";
+            $last_notif_id = $latest_notif;
+        }
+
+        // Check for new posts (global feed alert)
+        $latest_post = (int)db_query_single($db, 'SELECT MAX(id) FROM posts') ?: 0;
+        if ($latest_post > $last_post_id) {
+            // Only alert if it's not our own post
+            $post = db_query_single($db, 'SELECT user_id FROM posts WHERE id=:id', [':id' => $latest_post], true);
+            if ($post && (int)$post['user_id'] !== $uid) {
+                echo "data: " . json_encode(['type' => 'new_post']) . "\n\n";
+            }
+            $last_post_id = $latest_post;
+        }
+
+        if (ob_get_level() > 0) ob_flush();
+        flush();
+        sleep(5);
+    }
+    exit;
+}
 
 // POST /users/:username/follow — toggle follow
 if ($method === 'POST' && $resource === 'users' && $sub1 && $sub1 !== 'me' && !is_numeric($sub1) && $sub2 === 'follow') {

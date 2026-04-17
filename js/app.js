@@ -62,7 +62,38 @@ const notifBadge     = document.getElementById('notif-badge');
 const feed           = document.getElementById('feed');
 const loadMoreWrap   = document.getElementById('load-more-wrap');
 const loadMoreBtn    = document.getElementById('load-more-btn');
+const themeToggle    = document.getElementById('theme-toggle');
+const feedSentinel   = document.getElementById('feed-sentinel');
 const toastEl        = document.getElementById('toast');
+
+// Infinite scroll observer
+const feedObserver = new IntersectionObserver((entries) => {
+  if (entries[0].isIntersecting && !loadMoreBtn.disabled && !loadMoreWrap.hidden) {
+    loadPosts(currentPage + 1, false);
+  }
+}, { threshold: 0.1 });
+
+if (feedSentinel) feedObserver.observe(feedSentinel);
+
+// Initialize theme
+if (localStorage.getItem('magpie-theme') === 'dark') {
+  document.body.classList.add('dark-mode');
+  if (themeToggle) {
+    themeToggle.querySelector('span').textContent = 'Light Mode';
+    themeToggle.querySelector('svg').innerHTML = '<path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM2 12h2M20 12h2M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M17.66 4.93l-1.41 1.41M4.93 17.66l-1.41 1.41"/>';
+  }
+}
+
+if (themeToggle) {
+  themeToggle.addEventListener('click', () => {
+    const isDark = document.body.classList.toggle('dark-mode');
+    localStorage.setItem('magpie-theme', isDark ? 'dark' : 'light');
+    themeToggle.querySelector('span').textContent = isDark ? 'Light Mode' : 'Dark Mode';
+    themeToggle.querySelector('svg').innerHTML = isDark
+      ? '<path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM2 12h2M20 12h2M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M17.66 4.93l-1.41 1.41M4.93 17.66l-1.41 1.41"/>'
+      : '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+  });
+}
 
 // Following/People view
 const followingTabs      = document.getElementById('following-tabs');
@@ -145,6 +176,8 @@ let currentPage  = 1;
 let totalPages   = 1;
 let isSubmitting = false;
 let currentFeed  = 'for-you';
+let currentQuery = '';
+let currentUsername = '';
 let feedRefreshTimer = null;
 
 // Compose modal state
@@ -202,11 +235,43 @@ let lightboxIndex  = 0;
     resetBtn.dataset.token = resetToken;
   }
 
-  if (!currentUser && !resetToken) {
+  if (!currentUser && !resetToken && !hash) {
     showAuthModal('login');
   }
 
-  loadPosts(1, true);
+  const handleHash = () => {
+    const hash = window.location.hash.substring(1);
+    if (hash.startsWith('/user/')) {
+      currentUsername = hash.substring(6);
+      currentQuery    = '';
+      currentFeed     = 'user';
+      showView('home'); 
+      document.querySelector('.view-title').textContent = `@${currentUsername}`;
+      document.getElementById('feed-tabs').style.display = 'none';
+      document.getElementById('compose').style.display = 'none';
+      loadPosts(1, true);
+    } else if (hash.startsWith('/search')) {
+      const h_params = new URLSearchParams(hash.substring(7));
+      currentQuery    = h_params.get('q') || '';
+      currentUsername = '';
+      currentFeed     = 'search';
+      showView('home');
+      document.querySelector('.view-title').textContent = `Search: ${currentQuery}`;
+      document.getElementById('feed-tabs').style.display = 'none';
+      document.getElementById('compose').style.display = 'none';
+      loadPosts(1, true);
+    } else {
+      // Home / For You
+      currentFeed = 'for-you';
+      document.querySelector('.view-title').textContent = 'Home';
+      document.getElementById('feed-tabs').style.display = '';
+      document.getElementById('compose').style.display = currentUser ? '' : 'none';
+      loadPosts(1, true);
+    }
+  };
+
+  window.addEventListener('hashchange', handleHash);
+  handleHash();
 })();
 
 // ── Feed tabs ─────────────────────────────────────────────
@@ -499,6 +564,7 @@ function onLogin(user, token = null) {
   verifyBanner.style.display     = user.email_verified ? 'none' : 'block';
   postInput.focus();
   refreshNotifCount();
+  initSSE();
 }
 
 resendVerifyBtn.addEventListener('click', async () => {
@@ -576,7 +642,10 @@ async function submitPost() {
   try {
     const fd = new FormData();
     fd.append('body', body);
-    postImageFiles.forEach(f => fd.append('images[]', f));
+    for (const f of postImageFiles) {
+      const compressed = await compressImage(f);
+      fd.append('images[]', compressed);
+    }
 
     await apiFetch('posts', { method: 'POST', body: fd });
     postInput.value = '';
@@ -616,8 +685,11 @@ function scheduleFeedRefresh() {
 async function loadPosts(page, replace) {
   loadMoreBtn.disabled = true;
   try {
-    const feedParam = currentFeed === 'following' ? '&feed=following' : '';
-    const data = await apiFetch(`posts?page=${page}${feedParam}`);
+    const feedParam = currentFeed === 'following' ? '&feed=following' : (currentFeed === 'liked' ? '&feed=liked' : '');
+    const qParam    = currentQuery ? `&q=${encodeURIComponent(currentQuery)}` : '';
+    const uParam    = currentUsername ? `&username=${encodeURIComponent(currentUsername)}` : '';
+    
+    const data = await apiFetch(`posts?page=${page}${feedParam}${qParam}${uParam}`);
     currentPage = data.page;
     totalPages  = data.pages;
 
@@ -671,7 +743,7 @@ function renderPost(post, opts = {}) {
         ${editedLabel}
       </div>
       ${replyingTo}
-      ${post.body ? `<div class="post-body post-body-clickable">${esc(post.body)}</div>` : ''}
+      ${post.body ? `<div class="post-body post-body-clickable">${parseRichText(post.body)}</div>` : ''}
       ${imageHtml}
       ${quoteCard}
       <div class="post-actions">
@@ -906,7 +978,7 @@ function renderQuoteCard(quote) {
         <span class="post-sep">·</span>
         <span class="quote-time">${timeAgo(quote.created_at)}</span>
       </div>
-      <div class="quote-body">${esc(quote.body)}</div>
+      <div class="quote-body">${parseRichText(quote.body)}</div>
     </div>`;
 }
 
@@ -1082,7 +1154,7 @@ function openComposeModal(mode, post) {
           <span class="post-username">${esc(post.display_name || post.username)}</span>
           <span class="post-handle">@${esc(post.username)}</span>
         </div>
-        <div class="post-body">${esc(post.body)}</div>
+        <div class="post-body">${parseRichText(post.body)}</div>
       </div>`;
     composeModalCtx.appendChild(contextPost);
     composeModalQuote.style.display = 'none';
@@ -1149,7 +1221,11 @@ composeModalSubmit.addEventListener('click', async () => {
   fd.append('body', body);
   if (composeMode === 'reply') fd.append('parent_id', composeTargetId);
   if (composeMode === 'quote') fd.append('quote_id',  composeTargetId);
-  composeModalImageFiles.forEach(f => fd.append('images[]', f));
+  
+  for (const f of composeModalImageFiles) {
+    const compressed = await compressImage(f);
+    fd.append('images[]', compressed);
+  }
 
   const wasReply = composeMode === 'reply';
   const threadWasOpen = !threadModal.classList.contains('hidden');
@@ -1202,6 +1278,48 @@ async function loadLikedPosts(page, replace) {
 }
 
 // ── Notifications ─────────────────────────────────────────
+let sseSource = null;
+
+function initSSE() {
+  if (sseSource) sseSource.close();
+  sseSource = new EventSource('api.php/stream');
+  sseSource.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'notification') {
+      updateNotifBadge(data.unread);
+    } else if (data.type === 'new_post') {
+      showNewPostAlert();
+    }
+  };
+  sseSource.onerror = () => {
+    sseSource.close();
+    // Exponential backoff or simple delay
+    setTimeout(initSSE, 10000);
+  };
+}
+
+function showNewPostAlert() {
+  // Only show on the home views and if we are near the top
+  const isHomeView = document.getElementById('view-home').style.display !== 'none';
+  if (!isHomeView || window.scrollY > 400) return;
+  if (currentFeed !== 'for-you' && currentFeed !== 'following') return;
+
+  // Prevent duplicate alerts
+  if (document.querySelector('.new-post-alert')) return;
+
+  const alert = document.createElement('div');
+  alert.className = 'new-post-alert';
+  alert.innerHTML = '<span>New posts available</span>';
+  alert.onclick = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    loadPosts(1, true);
+    alert.remove();
+  };
+  
+  document.getElementById('view-home').prepend(alert);
+  setTimeout(() => alert.remove(), 15000);
+}
+
 async function refreshNotifCount() {
   if (!currentUser) return;
   try {
@@ -1219,8 +1337,7 @@ function updateNotifBadge(count) {
   }
 }
 
-// Poll for new notifications every 60 s
-setInterval(() => { if (currentUser) refreshNotifCount(); }, 60000);
+// EventSource handles updates now
 
 async function loadNotifications() {
   const list = document.getElementById('notifications-list');
@@ -1270,7 +1387,7 @@ function renderNotifications(notifs) {
       text = `<strong>${esc(actor.display_name)}</strong> reposted your post`;
     }
 
-    const snippet = n.post_body ? `<div class="notif-snippet">${esc(n.post_body)}</div>` : '';
+    const snippet = n.post_body ? `<div class="notif-snippet">${parseRichText(n.post_body)}</div>` : '';
 
     item.innerHTML = `
       <div class="notif-icon-col">${icon}</div>
@@ -1356,8 +1473,9 @@ avatarUploadBtn.addEventListener('click', () => avatarFile.click());
 avatarFile.addEventListener('change', async () => {
   const file = avatarFile.files[0];
   if (!file) return;
+  const compressed = await compressImage(file, 400, 400, 0.9);
   const fd = new FormData();
-  fd.append('avatar', file);
+  fd.append('avatar', compressed);
   try {
     const data = await apiFetch('users/me/avatar', { method: 'POST', body: fd });
     currentUser = data.user;
@@ -1699,6 +1817,43 @@ lightboxPrev.addEventListener('click', e => { e.stopPropagation(); lightboxNav(-
 lightboxNext.addEventListener('click', e => { e.stopPropagation(); lightboxNav(1); });
 
 // ── Utilities ─────────────────────────────────────────────
+async function compressImage(file, maxW = 1200, maxH = 1200, quality = 0.8) {
+  if (!file || !file.type.startsWith('image/')) return file;
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+        if (w > maxW || h > maxH) {
+          if (w > h) { h *= maxW / w; w = maxW; }
+          else { w *= maxH / h; h = maxH; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => {
+          resolve(new File([blob], file.name.replace(/\.[^/.]+$/, "") + ".jpg", { type: 'image/jpeg' }));
+        }, 'image/jpeg', quality);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function parseRichText(text) {
+  if (!text) return '';
+  const s = esc(text);
+  return s
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="post-link" target="_blank" rel="noopener">$1</a>')
+    .replace(/@([a-zA-Z0-9_]+)/g, '<a href="#/user/$1" class="post-mention" onclick="event.stopPropagation()">@$1</a>')
+    .replace(/#([a-zA-Z0-9_]+)/g, '<a href="#/search?q=%23$1" class="post-hashtag" onclick="event.stopPropagation()">#$1</a>');
+}
+
 function esc(str) {
   if (typeof str !== 'string') return str;
   const s = str

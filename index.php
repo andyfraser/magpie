@@ -228,6 +228,11 @@
       <span>Admin</span>
     </a>
 
+    <button class="theme-toggle" id="theme-toggle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <span>Dark Mode</span>
+    </button>
+
     <div class="sidebar-spacer"></div>
 
     <div class="sidebar-user" id="sidebar-user" style="display:none">
@@ -291,6 +296,7 @@
       <div id="feed"></div>
       <div id="load-more-wrap" hidden>
         <button class="btn btn-ghost" id="load-more-btn">Load more</button>
+        <div id="feed-sentinel" style="height:20px;"></div>
       </div>
     </div>
 

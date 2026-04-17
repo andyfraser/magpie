@@ -17,10 +17,11 @@ Magpie is a Single Page Application (SPA) designed for simplicity and speed. It 
 
 ### 2.2 Running Magpie Locally
 1. Open your terminal in the project directory.
-2. Start the built-in PHP server:
+2. Start the built-in PHP server with **multi-threaded workers** (required for real-time updates):
    ```bash
-   php -S localhost:8000
+   PHP_CLI_SERVER_WORKERS=5 php -S localhost:8000
    ```
+   *Note: Using multiple workers prevents the server from freezing during real-time data streaming.*
 3. Open your browser and navigate to `http://localhost:8000`.
 
 ### 2.3 Creating Your Account
@@ -40,15 +41,18 @@ To prevent spam and ensure account security, Magpie requires email verification 
 ## 3. Using Magpie
 
 ### 3.1 The Feed
-Magpie offers three primary ways to view content:
+Magpie offers a seamless experience for viewing content:
+- **Infinite Scroll:** The feed automatically loads new posts as you scroll to the bottom. No "Load More" button is required.
 - **For You:** A global feed of all recent posts from across the platform.
 - **Following:** A curated feed containing only posts from users you follow.
 - **Liked:** A personal collection of every post you have liked.
+- **New Post Alert:** If others create posts while you are viewing the feed, a "New posts available" banner will appear at the top.
 
 ### 3.2 Creating Posts
 - Click the **Compose** button or use the text area at the top of the feed.
+- **Rich Text:** URLs, `@mentions`, and `#hashtags` are automatically converted into interactive links.
 - Posts are limited to **500 characters**.
-- **Images:** You can attach up to **4 images** to a post. Magpie supports JPEG, PNG, GIF, and WebP formats up to **5 MB per image**.
+- **Images:** You can attach up to **4 images** to a post. Magpie supports JPEG, PNG, GIF, and WebP. Images are automatically compressed on your device before upload to save data and speed up posting.
 - You can post standard updates, **Replies** to existing threads, or **Quote Posts** (reposting someone else's content with your own commentary).
 - To edit a post, click its context menu; you can modify the text and manage (add or remove) attached images.
 
@@ -69,6 +73,7 @@ The sidebar features a notification badge that updates in real-time. You will re
 
 ### 4.1 Customizing Your Identity
 Navigate to your profile to update your public information:
+- **Theme:** Toggle between **Light** and **Dark Mode** via the sidebar switch. Your preference is saved locally.
 - **Display Name:** Choose how you want your name to appear to others.
 - **Bio:** Share a short description of yourself.
 - **Avatar:** Upload a custom profile picture (JPEG, PNG, GIF, or WebP up to 2MB) or choose from one of the built-in Magpie presets.
@@ -90,9 +95,10 @@ If you are an administrator, you have access to additional management tools:
 
 ## 6. Troubleshooting
 
+- **Site Slowness:** If the application feels unresponsive, frozen, or extremely slow, ensure you started the server with multi-threaded workers: `PHP_CLI_SERVER_WORKERS=5 php -S localhost:8000`. The real-time notification system requires multiple threads to avoid blocking.
 - **Database Issues:** If you see errors related to the database, ensure the `magpie.db` file is writable by the PHP process.
 - **Email Not Sending:** If you are running Magpie locally and not receiving emails, ensure your `php.ini` is configured to use a mail server or a tool like [Mailpit](https://github.com/axllent/mailpit).
-- **Updates Not Appearing:** Magpie refreshes the feed automatically every 2 minutes. You can manually refresh by clicking the "Magpie" logo or switching tabs.
+- **Updates Not Appearing:** Magpie refreshes content instantly via real-time alerts. If you see a "New posts available" banner, click it to refresh the feed.
 
 ---
 
