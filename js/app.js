@@ -58,6 +58,12 @@ const navFollowing   = document.getElementById('nav-following');
 const navAdmin       = document.getElementById('nav-admin');
 const navNotifications = document.getElementById('nav-notifications');
 const notifBadge     = document.getElementById('notif-badge');
+const mNavFollowing  = document.getElementById('mobile-nav-following');
+const mNavLiked      = document.getElementById('mobile-nav-liked');
+const mNavNotifications = document.getElementById('mobile-nav-notifications');
+const mNavProfile    = document.getElementById('mobile-nav-profile');
+const mNotifBadge    = document.getElementById('mobile-notif-badge');
+const mComposeFab    = document.getElementById('mobile-compose-fab');
 
 const feed           = document.getElementById('feed');
 const loadMoreWrap   = document.getElementById('load-more-wrap');
@@ -313,6 +319,12 @@ function showView(name) {
   if (name === 'notifications') loadNotifications();
 }
 
+if (mComposeFab) {
+  mComposeFab.addEventListener('click', () => {
+    openComposeModal('new');
+  });
+}
+
 // ── People (Following) view logic ─────────────────────────
 followingTabs.addEventListener('click', e => {
   const tab = e.target.closest('.feed-tab');
@@ -536,7 +548,13 @@ logoutBtn.addEventListener('click', async () => {
   navFollowing.style.display     = 'none';
   navAdmin.style.display         = 'none';
   navNotifications.style.display = 'none';
+  mNavProfile.style.display      = 'none';
+  mNavFollowing.style.display    = 'none';
+  mNavLiked.style.display        = 'none';
+  mNavNotifications.style.display = 'none';
+  mComposeFab.style.display      = 'none';
   notifBadge.classList.add('hidden');
+  if (mNotifBadge) mNotifBadge.classList.add('hidden');
   verifyBanner.style.display = 'none';
   loginUsernameI.value = loginPasswordI.value = '';
   signupUsername.value = signupEmail.value = signupPassword.value = signupConfirm.value = '';
@@ -560,6 +578,11 @@ function onLogin(user, token = null) {
   navLiked.style.display         = '';
   navFollowing.style.display     = '';
   navNotifications.style.display = '';
+  mNavProfile.style.display      = '';
+  mNavFollowing.style.display    = '';
+  mNavLiked.style.display        = '';
+  mNavNotifications.style.display = '';
+  mComposeFab.style.display      = '';
   navAdmin.style.display         = user.is_admin ? '' : 'none';
   verifyBanner.style.display     = user.email_verified ? 'none' : 'block';
   postInput.focus();
@@ -1133,13 +1156,19 @@ function renderThread(data) {
 }
 
 // ── Compose modal (reply / quote) ─────────────────────────
-function openComposeModal(mode, post) {
+function openComposeModal(mode, post = null) {
   composeMode     = mode;
-  composeTargetId = post.id;
+  composeTargetId = post ? post.id : null;
 
   if (currentUser) setAvatarEl(composeModalAvatar, currentUser);
 
-  if (mode === 'reply') {
+  if (mode === 'new') {
+    composeModalInput.placeholder = "What's happening?";
+    composeModalLabel.style.display = 'none';
+    composeModalCtx.innerHTML = '';
+    composeModalQuote.style.display = 'none';
+    composeModalQuote.innerHTML = '';
+  } else if (mode === 'reply') {
     composeModalInput.placeholder = 'Post your reply…';
     composeModalLabel.style.display = '';
     composeModalLabel.innerHTML = `Replying to <span class="reply-to-handle">@${esc(post.display_name || post.username)}</span>`;
@@ -1213,7 +1242,8 @@ function updateComposeModalCount() {
 }
 
 composeModalSubmit.addEventListener('click', async () => {
-  if (composeIsSubmitting || !currentUser || !composeTargetId) return;
+  if (composeIsSubmitting || !currentUser) return;
+  if (composeMode !== 'new' && !composeTargetId) return;
   const body = composeModalInput.value.trim();
   if (!body && composeModalImageFiles.length === 0) return;
 
@@ -1221,24 +1251,28 @@ composeModalSubmit.addEventListener('click', async () => {
   fd.append('body', body);
   if (composeMode === 'reply') fd.append('parent_id', composeTargetId);
   if (composeMode === 'quote') fd.append('quote_id',  composeTargetId);
-  
+
   for (const f of composeModalImageFiles) {
     const compressed = await compressImage(f);
     fd.append('images[]', compressed);
   }
 
-  const wasReply = composeMode === 'reply';
+  const mode = composeMode;
   const threadWasOpen = !threadModal.classList.contains('hidden');
   composeIsSubmitting = composeModalSubmit.disabled = true;
   try {
     await apiFetch('posts', { method: 'POST', body: fd });
     closeComposeModal();
-    showToast(wasReply ? 'Reply posted' : 'Quote posted');
-    if (wasReply && threadWasOpen) {
+    let msg = 'Post published';
+    if (mode === 'reply') msg = 'Reply posted';
+    if (mode === 'quote') msg = 'Quote posted';
+    showToast(msg);
+    if (mode === 'reply' && threadWasOpen) {
       refreshThread();
     }
     loadPosts(1, true);
   } catch (e) {
+
     showToast(e.message, true);
   } finally {
     composeIsSubmitting = false;
@@ -1329,12 +1363,15 @@ async function refreshNotifCount() {
 }
 
 function updateNotifBadge(count) {
-  if (count > 0) {
-    notifBadge.textContent = count > 99 ? '99+' : count;
-    notifBadge.classList.remove('hidden');
-  } else {
-    notifBadge.classList.add('hidden');
-  }
+  const labels = document.querySelectorAll('.notif-badge');
+  labels.forEach(l => {
+    if (count > 0) {
+      l.textContent = count > 99 ? '99+' : count;
+      l.classList.remove('hidden');
+    } else {
+      l.classList.add('hidden');
+    }
+  });
 }
 
 // EventSource handles updates now
@@ -1529,6 +1566,9 @@ deleteAcctBtn.addEventListener('click', async () => {
     navProfile.style.display       = 'none';
     navAdmin.style.display         = 'none';
     navNotifications.style.display = 'none';
+    mNavProfile.style.display      = 'none';
+    mNavFollowing.style.display    = 'none';
+    mNavNotifications.style.display = 'none';
     showView('home');
     showAuthModal('login');
     loadPosts(1, true);
