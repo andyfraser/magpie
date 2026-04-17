@@ -4,7 +4,13 @@ header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit(0);
 
-const DB_PATH              = __DIR__ . '/magpie.db';
+$CONFIG = file_exists(__DIR__ . '/config.php') ? require __DIR__ . '/config.php' : [
+    'db' => [
+        'driver'      => 'sqlite',
+        'sqlite_path' => __DIR__ . '/magpie.db',
+    ]
+];
+
 const UPLOADS_DIR          = __DIR__ . '/uploads/avatars/';
 const UPLOADS_URL          = '/uploads/avatars/';
 const POSTS_UPLOADS_DIR    = __DIR__ . '/uploads/posts/';
@@ -14,93 +20,183 @@ const SCHEMA_VERSION       = 9;
 
 // ── Database ──────────────────────────────────────────────
 
-function get_db(): SQLite3 {
-    $db = new SQLite3(DB_PATH);
-    $db->enableExceptions(true);
-    $db->exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
-
-    $db->exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
-    $current = $db->querySingle('SELECT version FROM schema_version LIMIT 1');
-    if ((int)$current !== SCHEMA_VERSION) {
-        $db->exec('PRAGMA foreign_keys=OFF;');
-        $db->exec('
-            DROP TABLE IF EXISTS rate_limits;
-            DROP TABLE IF EXISTS notifications;
-            DROP TABLE IF EXISTS liked_posts;
-            DROP TABLE IF EXISTS posts;
-            DROP TABLE IF EXISTS follows;
-            DROP TABLE IF EXISTS users;
-            DROP TABLE IF EXISTS remember_tokens;
-            DROP TABLE IF EXISTS settings;
-            DELETE FROM schema_version;
-        ');
-        $db->exec('PRAGMA foreign_keys=ON;');
-        $db->exec('INSERT INTO schema_version VALUES (' . SCHEMA_VERSION . ')');
+function get_db(): PDO {
+    global $CONFIG;
+    $c = $CONFIG['db'];
+    
+    if ($c['driver'] === 'mysql') {
+        $dsn = "mysql:host={$c['host']};dbname={$c['dbname']};charset={$c['charset']}";
+        $db = new PDO($dsn, $c['user'], $c['pass'], [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => true,
+            PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES {$c['charset']}"
+        ]);
+    } else {
+        $db = new PDO("sqlite:" . $c['sqlite_path'], null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => true,
+        ]);
+        $db->exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
     }
 
-    $db->exec('
-        CREATE TABLE IF NOT EXISTS users (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            username     TEXT    NOT NULL UNIQUE,
-            email        TEXT    NOT NULL UNIQUE,
-            email_verified INTEGER NOT NULL DEFAULT 0,
-            verification_token TEXT,
-            reset_token  TEXT,
-            reset_token_expires INTEGER,
-            display_name TEXT,
-            bio          TEXT,
-            avatar       TEXT,
-            password     TEXT    NOT NULL,
-            is_admin     INTEGER NOT NULL DEFAULT 0,
-            disabled     INTEGER NOT NULL DEFAULT 0,
-            created_at   INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS posts (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id    INTEGER NOT NULL REFERENCES users(id),
-            username   TEXT    NOT NULL,
-            body       TEXT    NOT NULL,
-            image      TEXT,
-            likes      INTEGER NOT NULL DEFAULT 0,
-            parent_id  INTEGER REFERENCES posts(id),
-            quote_id   INTEGER REFERENCES posts(id),
-            edited_at  INTEGER,
-            created_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS liked_posts (
-            post_id INTEGER NOT NULL REFERENCES posts(id),
-            user_id INTEGER NOT NULL REFERENCES users(id),
-            PRIMARY KEY (post_id, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS follows (
-            follower_id INTEGER NOT NULL REFERENCES users(id),
-            followee_id INTEGER NOT NULL REFERENCES users(id),
-            PRIMARY KEY (follower_id, followee_id)
-        );
-        CREATE TABLE IF NOT EXISTS notifications (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id    INTEGER NOT NULL REFERENCES users(id),
-            actor_id   INTEGER NOT NULL REFERENCES users(id),
-            type       TEXT    NOT NULL,
-            post_id    INTEGER REFERENCES posts(id),
-            read       INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS remember_tokens (
-            token   TEXT    NOT NULL PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id),
-            expires INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS settings (
-            key   TEXT NOT NULL PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS rate_limits (
-            key     TEXT NOT NULL PRIMARY KEY,
-            hits    INTEGER NOT NULL,
-            expires INTEGER NOT NULL
-        );
-    ');
+    db_exec($db, 'CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
+    $current = db_query_single($db, 'SELECT version FROM schema_version LIMIT 1');
+    
+    if ((int)$current !== SCHEMA_VERSION) {
+        if ($c['driver'] === 'sqlite') $db->exec('PRAGMA foreign_keys=OFF;');
+        
+        $tables = ['rate_limits', 'notifications', 'liked_posts', 'posts', 'follows', 'users', 'remember_tokens', 'settings'];
+        foreach ($tables as $table) {
+            $db->exec("DROP TABLE IF EXISTS $table");
+        }
+        $db->exec('DELETE FROM schema_version');
+        
+        if ($c['driver'] === 'sqlite') $db->exec('PRAGMA foreign_keys=ON;');
+        db_exec($db, 'INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
+    }
+
+    if ($c['driver'] === 'mysql') {
+        $db->exec('
+            CREATE TABLE IF NOT EXISTS users (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                username     VARCHAR(255) NOT NULL UNIQUE,
+                email        VARCHAR(255) NOT NULL UNIQUE,
+                email_verified TINYINT(1) NOT NULL DEFAULT 0,
+                verification_token VARCHAR(255),
+                reset_token  VARCHAR(255),
+                reset_token_expires INT,
+                display_name VARCHAR(255),
+                bio          TEXT,
+                avatar       VARCHAR(255),
+                password     VARCHAR(255) NOT NULL,
+                is_admin     TINYINT(1) NOT NULL DEFAULT 0,
+                disabled     TINYINT(1) NOT NULL DEFAULT 0,
+                created_at   INT NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS posts (
+                id         INT AUTO_INCREMENT PRIMARY KEY,
+                user_id    INT NOT NULL,
+                username   VARCHAR(255) NOT NULL,
+                body       TEXT NOT NULL,
+                image      TEXT,
+                likes      INT NOT NULL DEFAULT 0,
+                parent_id  INT,
+                quote_id   INT,
+                edited_at  INT,
+                created_at INT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (parent_id) REFERENCES posts(id),
+                FOREIGN KEY (quote_id) REFERENCES posts(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS liked_posts (
+                post_id INT NOT NULL,
+                user_id INT NOT NULL,
+                PRIMARY KEY (post_id, user_id),
+                FOREIGN KEY (post_id) REFERENCES posts(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS follows (
+                follower_id INT NOT NULL,
+                followee_id INT NOT NULL,
+                PRIMARY KEY (follower_id, followee_id),
+                FOREIGN KEY (follower_id) REFERENCES users(id),
+                FOREIGN KEY (followee_id) REFERENCES users(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS notifications (
+                id         INT AUTO_INCREMENT PRIMARY KEY,
+                user_id    INT NOT NULL,
+                actor_id   INT NOT NULL,
+                type       VARCHAR(50) NOT NULL,
+                post_id    INT,
+                `read`     TINYINT(1) NOT NULL DEFAULT 0,
+                created_at INT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (actor_id) REFERENCES users(id),
+                FOREIGN KEY (post_id) REFERENCES posts(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS remember_tokens (
+                token   VARCHAR(255) NOT NULL PRIMARY KEY,
+                user_id INT NOT NULL,
+                expires INT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS settings (
+                `key`   VARCHAR(255) NOT NULL PRIMARY KEY,
+                `value` TEXT NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                `key`     VARCHAR(255) NOT NULL PRIMARY KEY,
+                hits    INT NOT NULL,
+                expires INT NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ');
+    } else {
+        $db->exec('
+            CREATE TABLE IF NOT EXISTS users (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                username     TEXT    NOT NULL UNIQUE,
+                email        TEXT    NOT NULL UNIQUE,
+                email_verified INTEGER NOT NULL DEFAULT 0,
+                verification_token TEXT,
+                reset_token  TEXT,
+                reset_token_expires INTEGER,
+                display_name TEXT,
+                bio          TEXT,
+                avatar       TEXT,
+                password     TEXT    NOT NULL,
+                is_admin     INTEGER NOT NULL DEFAULT 0,
+                disabled     INTEGER NOT NULL DEFAULT 0,
+                created_at   INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS posts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id),
+                username   TEXT    NOT NULL,
+                body       TEXT    NOT NULL,
+                image      TEXT,
+                likes      INTEGER NOT NULL DEFAULT 0,
+                parent_id  INTEGER REFERENCES posts(id),
+                quote_id   INTEGER REFERENCES posts(id),
+                edited_at  INTEGER,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS liked_posts (
+                post_id INTEGER NOT NULL REFERENCES posts(id),
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                PRIMARY KEY (post_id, user_id)
+            );
+            CREATE TABLE IF NOT EXISTS follows (
+                follower_id INTEGER NOT NULL REFERENCES users(id),
+                followee_id INTEGER NOT NULL REFERENCES users(id),
+                PRIMARY KEY (follower_id, followee_id)
+            );
+            CREATE TABLE IF NOT EXISTS notifications (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id),
+                actor_id   INTEGER NOT NULL REFERENCES users(id),
+                type       TEXT    NOT NULL,
+                post_id    INTEGER REFERENCES posts(id),
+                read       INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS remember_tokens (
+                token   TEXT    NOT NULL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                expires INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT NOT NULL PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                key     TEXT NOT NULL PRIMARY KEY,
+                hits    INTEGER NOT NULL,
+                expires INTEGER NOT NULL
+            );
+        ');
+    }
     return $db;
 }
 
@@ -113,20 +209,20 @@ function get_base_url(): string {
     return "$protocol://$host";
 }
 
-function check_rate_limit(SQLite3 $db, string $key, int $limit, int $window_seconds): void {
+function check_rate_limit(PDO $db, string $key, int $limit, int $window_seconds): void {
     $now = time();
-    db_exec($db, 'DELETE FROM rate_limits WHERE expires < :now', [':now' => $now]);
+    db_exec($db, 'DELETE FROM rate_limits WHERE expires < ?', [$now]);
     
-    $row = db_query_single($db, 'SELECT hits, expires FROM rate_limits WHERE key=:k', [':k' => $key], true);
+    $row = db_query_single($db, 'SELECT hits, expires FROM rate_limits WHERE `key`=?', [$key], true);
     if ($row) {
         if ($row['hits'] >= $limit) {
             json_error('Too many requests. Please try again later.', 429);
         }
-        db_exec($db, 'UPDATE rate_limits SET hits = hits + 1 WHERE key=:k', [':k' => $key]);
+        db_exec($db, 'UPDATE rate_limits SET hits = hits + 1 WHERE `key`=?', [$key]);
     } else {
-        db_exec($db, 'INSERT INTO rate_limits (key, hits, expires) VALUES (:k, 1, :e)', [
-            ':k' => $key,
-            ':e' => $now + $window_seconds
+        db_exec($db, 'INSERT INTO rate_limits (`key`, hits, expires) VALUES (?, 1, ?)', [
+            $key,
+            $now + $window_seconds
         ]);
     }
 }
@@ -147,8 +243,8 @@ function validate_csrf(): void {
         }
     }
 }
-function get_setting(SQLite3 $db, string $key, string $default = ''): string {
-    return (string)(db_query_single($db, 'SELECT value FROM settings WHERE key=:k', [':k' => $key]) ?? $default);
+function get_setting(PDO $db, string $key, string $default = ''): string {
+    return (string)(db_query_single($db, 'SELECT `value` FROM settings WHERE `key`=?', [$key]) ?? $default);
 }
 
 function json_error(string $msg, int $code = 400): never {
@@ -172,43 +268,48 @@ function require_auth(): int {
     return $uid;
 }
 
-function require_admin(SQLite3 $db): int {
+function require_admin(PDO $db): int {
     $uid  = require_auth();
-    $user = db_query_single($db, 'SELECT is_admin FROM users WHERE id=:id', [':id' => $uid], true);
+    $user = db_query_single($db, 'SELECT is_admin FROM users WHERE id=?', [$uid], true);
     if (!$user || !$user['is_admin']) json_error('Forbidden', 403);
     return $uid;
 }
 
 // ── Database Helpers ──────────────────────────────────────
 
-function db_exec(SQLite3 $db, string $sql, array $params = []): void {
+function db_exec(PDO $db, string $sql, array $params = []): void {
     $stmt = $db->prepare($sql);
-    foreach ($params as $key => $val) {
-        $type = is_int($val) ? SQLITE3_INTEGER : (is_float($val) ? SQLITE3_FLOAT : (is_null($val) ? SQLITE3_NULL : SQLITE3_TEXT));
-        $stmt->bindValue($key, $val, $type);
+    foreach ($params as $i => $val) {
+        if (is_string($i) && strpos($sql, $i) === false) continue;
+        $type = is_int($val) ? PDO::PARAM_INT : (is_bool($val) ? PDO::PARAM_BOOL : (is_null($val) ? PDO::PARAM_NULL : PDO::PARAM_STR));
+        $stmt->bindValue(is_int($i) ? $i + 1 : $i, $val, $type);
     }
     $stmt->execute();
 }
 
-function db_query(SQLite3 $db, string $sql, array $params = []): SQLite3Result {
+function db_query(PDO $db, string $sql, array $params = []): PDOStatement {
     $stmt = $db->prepare($sql);
-    foreach ($params as $key => $val) {
-        $type = is_int($val) ? SQLITE3_INTEGER : (is_float($val) ? SQLITE3_FLOAT : (is_null($val) ? SQLITE3_NULL : SQLITE3_TEXT));
-        $stmt->bindValue($key, $val, $type);
+    foreach ($params as $i => $val) {
+        if (is_string($i) && strpos($sql, $i) === false) continue;
+        $type = is_int($val) ? PDO::PARAM_INT : (is_bool($val) ? PDO::PARAM_BOOL : (is_null($val) ? PDO::PARAM_NULL : PDO::PARAM_STR));
+        $stmt->bindValue(is_int($i) ? $i + 1 : $i, $val, $type);
     }
-    return $stmt->execute();
+    $stmt->execute();
+    return $stmt;
 }
 
-function db_query_single(SQLite3 $db, string $sql, array $params = [], bool $entire_row = false): mixed {
+function db_query_single(PDO $db, string $sql, array $params = [], bool $entire_row = false): mixed {
     $stmt = $db->prepare($sql);
-    foreach ($params as $key => $val) {
-        $type = is_int($val) ? SQLITE3_INTEGER : (is_float($val) ? SQLITE3_FLOAT : (is_null($val) ? SQLITE3_NULL : SQLITE3_TEXT));
-        $stmt->bindValue($key, $val, $type);
+    foreach ($params as $i => $val) {
+        if (is_string($i) && strpos($sql, $i) === false) continue;
+        $type = is_int($val) ? PDO::PARAM_INT : (is_bool($val) ? PDO::PARAM_BOOL : (is_null($val) ? PDO::PARAM_NULL : PDO::PARAM_STR));
+        $stmt->bindValue(is_int($i) ? $i + 1 : $i, $val, $type);
     }
-    $result = $stmt->execute();
-    $row = $result->fetchArray($entire_row ? SQLITE3_ASSOC : SQLITE3_NUM);
+    $stmt->execute();
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row === false) return null;
-    return $entire_row ? $row : $row[0];
+    if ($entire_row) return $row;
+    return reset($row);
 }
 
 function format_user(array $u): array {
@@ -309,7 +410,7 @@ function post_select_cols(string $alias, ?int $uid): string {
                        : ', 0 AS liked_flag';
     $follow_col = $uid ? ", CASE WHEN f.follower_id IS NOT NULL THEN 1 ELSE 0 END AS following"
                        : ', 0 AS following';
-    $reposted_col = $uid ? ", CASE WHEN (SELECT 1 FROM posts r WHERE r.quote_id=$alias.id AND r.user_id=$uid AND r.body='' AND r.image IS NULL LIMIT 1) IS NOT NULL THEN 1 ELSE 0 END AS reposted_flag"
+    $reposted_col = $uid ? ", CASE WHEN (SELECT 1 FROM posts r WHERE r.quote_id=$alias.id AND r.user_id=:uid AND r.body='' AND r.image IS NULL LIMIT 1) IS NOT NULL THEN 1 ELSE 0 END AS reposted_flag"
                          : ', 0 AS reposted_flag';
     $a = $alias;
     return "
@@ -332,8 +433,8 @@ function post_select_cols(string $alias, ?int $uid): string {
 
 function post_join_sql(string $alias, ?int $uid): string {
     $a           = $alias;
-    $liked_join  = $uid ? "LEFT JOIN liked_posts lp ON lp.post_id=$a.id AND lp.user_id=$uid" : '';
-    $follow_join = $uid ? "LEFT JOIN follows f ON f.follower_id=$uid AND f.followee_id=$a.user_id" : '';
+    $liked_join  = $uid ? "LEFT JOIN liked_posts lp ON lp.post_id=$a.id AND lp.user_id=:uid" : '';
+    $follow_join = $uid ? "LEFT JOIN follows f ON f.follower_id=:uid AND f.followee_id=$a.user_id" : '';
     return "
         JOIN  users u  ON u.id  = $a.user_id
         LEFT JOIN posts  pp ON pp.id = $a.parent_id
@@ -393,17 +494,19 @@ function format_post_row(array $row, ?int $uid): array {
     return $row;
 }
 
-function fetch_post(SQLite3 $db, int $post_id, ?int $uid): ?array {
+function fetch_post(PDO $db, int $post_id, ?int $uid): ?array {
     $cols  = post_select_cols('p', $uid);
     $joins = post_join_sql('p', $uid);
-    $row   = db_query_single($db, "SELECT $cols FROM posts p $joins WHERE p.id=:id", [':id' => $post_id], true);
+    $params = [':id' => $post_id];
+    if ($uid) $params[':uid'] = $uid;
+    $row   = db_query_single($db, "SELECT $cols FROM posts p $joins WHERE p.id=:id", $params, true);
     return $row ? format_post_row($row, $uid) : null;
 }
 
-function delete_post_cascade(SQLite3 $db, int $post_id): void {
+function delete_post_cascade(PDO $db, int $post_id): void {
     // Delete child replies first
     $res = db_query($db, 'SELECT id FROM posts WHERE parent_id=:id', [':id' => $post_id]);
-    while ($child = $res->fetchArray(SQLITE3_ASSOC)) {
+    while ($child = $res->fetch()) {
         delete_post_cascade($db, (int)$child['id']);
     }
     // Delete post images if present
@@ -421,7 +524,7 @@ function delete_post_cascade(SQLite3 $db, int $post_id): void {
     db_exec($db, 'DELETE FROM posts         WHERE id=:id',      [':id' => $post_id]);
 }
 
-function delete_user_data(SQLite3 $db, int $uid): void {
+function delete_user_data(PDO $db, int $uid): void {
     $user = db_query_single($db, 'SELECT avatar FROM users WHERE id=:id', [':id' => $uid], true);
     if ($user && $user['avatar']) {
         $path = UPLOADS_DIR . $user['avatar'];
@@ -433,7 +536,7 @@ function delete_user_data(SQLite3 $db, int $uid): void {
     db_exec($db, 'DELETE FROM remember_tokens WHERE user_id=:id', [':id' => $uid]);
 
     $res = db_query($db, 'SELECT id FROM posts WHERE user_id=:id AND parent_id IS NULL', [':id' => $uid]);
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+    while ($row = $res->fetch()) {
         delete_post_cascade($db, (int)$row['id']);
     }
     // Orphaned replies from this user (parent was someone else's post)
@@ -442,7 +545,7 @@ function delete_user_data(SQLite3 $db, int $uid): void {
     db_exec($db, 'DELETE FROM notifications WHERE post_id IN (SELECT id FROM posts WHERE user_id=:id)', [':id' => $uid]);
     // Clean up images for any remaining posts
     $img_res = db_query($db, 'SELECT image FROM posts WHERE user_id=:id AND image IS NOT NULL', [':id' => $uid]);
-    while ($img_row = $img_res->fetchArray(SQLITE3_ASSOC)) {
+    while ($img_row = $img_res->fetch()) {
         $decoded = json_decode($img_row['image'], true);
         $filenames = is_array($decoded) ? $decoded : [$img_row['image']];
         foreach ($filenames as $fn) {
@@ -514,7 +617,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
         json_error('Email already registered');
 
     $hash     = password_hash($password, PASSWORD_BCRYPT);
-    $is_admin = (db_query_single($db, 'SELECT COUNT(*) FROM users') === 0) ? 1 : 0;
+    $is_admin = ((int)db_query_single($db, 'SELECT COUNT(*) FROM users') === 0) ? 1 : 0;
     $v_token  = bin2hex(random_bytes(32));
 
     db_exec($db, 'INSERT INTO users (username, email, password, is_admin, verification_token, created_at) VALUES (:u,:e,:p,:a,:v,:t)', [
@@ -526,7 +629,7 @@ if ($method === 'POST' && $resource === 'auth' && $sub1 === 'signup') {
         ':t' => time()
     ]);
 
-    $uid = $db->lastInsertRowID();
+    $uid = $db->lastInsertId();
     session_regenerate_id(true);
     $_SESSION['user_id'] = $uid;
 
@@ -830,7 +933,7 @@ if ($method === 'GET' && $resource === 'users' && !$sub1) {
     ", $params);
 
     $users = [];
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+    while ($row = $res->fetch()) {
         $u = format_user($row);
         $u['following'] = (bool)$row['following'];
         $users[] = $u;
@@ -842,13 +945,15 @@ if ($method === 'GET' && $resource === 'users' && !$sub1) {
 // POSTS
 // ══════════════════════════════════════════════════════════
 
-function fetch_descendants(SQLite3 $db, int $post_id, int $depth, ?int $uid, int &$count, int $max = 200): array {
+function fetch_descendants(PDO $db, int $post_id, int $depth, ?int $uid, int &$count, int $max = 200): array {
     if ($count >= $max) return [];
     $cols   = post_select_cols('p', $uid);
     $joins  = post_join_sql('p', $uid);
-    $res    = db_query($db, "SELECT $cols FROM posts p $joins WHERE p.parent_id=:id ORDER BY p.created_at ASC", [':id' => $post_id]);
+    $params = [':id' => $post_id];
+    if ($uid) $params[':uid'] = $uid;
+    $res    = db_query($db, "SELECT $cols FROM posts p $joins WHERE p.parent_id=:id ORDER BY p.created_at ASC", $params);
     $result = [];
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+    while ($row = $res->fetch()) {
         if ($count >= $max) break;
         $formatted          = format_post_row($row, $uid);
         $formatted['depth'] = $depth;
@@ -895,7 +1000,7 @@ if ($method === 'GET' && $resource === 'posts') {
     $q          = trim($_GET['q'] ?? '');
     $username   = trim($_GET['username'] ?? '');
     $liked_join = '';
-    $params     = [':lim' => $limit, ':off' => $offset];
+    $params     = [];
     $conditions = [];
 
     if ($q !== '') {
@@ -908,17 +1013,28 @@ if ($method === 'GET' && $resource === 'posts') {
     }
 
     if ($uid) {
-        $params[':uid'] = $uid;
         if ($feed === 'following') {
             $conditions[] = "(p.user_id IN (SELECT followee_id FROM follows WHERE follower_id=:uid) OR p.user_id=:uid)";
+            $params[':uid'] = $uid;
         } elseif ($feed === 'liked') {
             $liked_join = "JOIN liked_posts lp2 ON lp2.post_id = p.id AND lp2.user_id = :uid";
+            $params[':uid'] = $uid;
         }
     }
 
     $where_clause = $conditions ? 'WHERE ' . implode(' AND ', $conditions) : '';
+    
+    // Count query only needs params used in $where_clause or $liked_join
+    $total = (int)db_query_single($db, "SELECT COUNT(*) FROM posts p $liked_join $where_clause", $params);
+
     $cols         = post_select_cols('p', $uid);
     $joins        = post_join_sql('p', $uid);
+
+    // Main query needs all params plus :uid for select/joins, plus lim/off
+    $main_params = $params;
+    if ($uid) $main_params[':uid'] = $uid;
+    $main_params[':lim'] = $limit;
+    $main_params[':off'] = $offset;
 
     $res = db_query($db, "
         SELECT $cols FROM posts p
@@ -926,14 +1042,13 @@ if ($method === 'GET' && $resource === 'posts') {
         $where_clause
         ORDER BY p.created_at DESC
         LIMIT :lim OFFSET :off
-    ", $params);
+    ", $main_params);
 
     $posts = [];
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+    while ($row = $res->fetch()) {
         $posts[] = format_post_row($row, $uid);
     }
 
-    $total = (int)db_query_single($db, "SELECT COUNT(*) FROM posts p $liked_join $where_clause", $params);
     json_ok(['posts' => $posts, 'total' => $total, 'page' => $page, 'pages' => (int)ceil($total / $limit)]);
 }
 
@@ -998,7 +1113,7 @@ if ($method === 'POST' && $resource === 'posts' && !$id) {
         ':t'   => time()
     ]);
 
-    $nid = $db->lastInsertRowID();
+    $nid = $db->lastInsertId();
 
     // Create reply notification
     if ($parent_id && isset($parent)) {
@@ -1056,7 +1171,7 @@ if ($method === 'POST' && $resource === 'posts' && $id && $sub2 === 'repost') {
         db_exec($db, 'INSERT INTO posts (user_id, username, body, image, quote_id, created_at) VALUES (:u,:n,\'\',NULL,:q,:t)', [
             ':u' => $uid, ':n' => $u['username'], ':q' => $id, ':t' => time()
         ]);
-        $nid = $db->lastInsertRowID();
+        $nid = $db->lastInsertId();
         
         $target_uid = (int)$original['user_id'];
         if ($target_uid !== $uid) {
@@ -1204,7 +1319,7 @@ if ($method === 'GET' && $resource === 'notifications') {
     ", [':uid' => $uid]);
 
     $notifs = [];
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+    while ($row = $res->fetch()) {
         $notifs[] = [
             'id'           => (int)$row['id'],
             'type'         => $row['type'],
@@ -1221,13 +1336,13 @@ if ($method === 'GET' && $resource === 'notifications') {
         ];
     }
 
-    $unread = (int)db_query_single($db, 'SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read=0', [':uid' => $uid]);
+    $unread = (int)db_query_single($db, 'SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND `read`=0', [':uid' => $uid]);
     json_ok(['notifications' => $notifs, 'unread' => $unread]);
 }
 
 if ($method === 'POST' && $resource === 'notifications' && $sub1 === 'read') {
     $uid = require_auth();
-    db_exec($db, 'UPDATE notifications SET read=1 WHERE user_id=:uid', [':uid' => $uid]);
+    db_exec($db, 'UPDATE notifications SET `read`=1 WHERE user_id=:uid', [':uid' => $uid]);
     json_ok(['ok' => true]);
 }
 
@@ -1243,7 +1358,7 @@ if ($method === 'GET' && $resource === 'admin' && $sub1 === 'users') {
         GROUP  BY u.id ORDER BY u.created_at ASC
     ');
     $users = [];
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+    while ($row = $res->fetch()) {
         $u = format_user($row);
         $u['post_count'] = (int)$row['post_count'];
         $users[] = $u;
@@ -1324,9 +1439,16 @@ if ($method === 'PATCH' && $resource === 'admin' && $sub1 === 'settings') {
     if (array_key_exists('remember_me_days', $input)) {
         $days = (int)$input['remember_me_days'];
         if ($days < 1 || $days > 365) json_error('Remember me days must be between 1 and 365');
-        db_exec($db, 'INSERT INTO settings (key, value) VALUES (:k, :v) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [
-            ':k' => 'remember_me_days', ':v' => (string)$days,
-        ]);
+        global $CONFIG;
+        if ($CONFIG['db']['driver'] === 'mysql') {
+            db_exec($db, 'INSERT INTO settings (`key`, `value`) VALUES (:k, :v) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)', [
+                ':k' => 'remember_me_days', ':v' => (string)$days,
+            ]);
+        } else {
+            db_exec($db, 'INSERT INTO settings (key, value) VALUES (:k, :v) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [
+                ':k' => 'remember_me_days', ':v' => (string)$days,
+            ]);
+        }
     }
     json_ok(['settings' => [
         'remember_me_days' => (int)(get_setting($db, 'remember_me_days') ?: 30),
@@ -1363,7 +1485,7 @@ if ($method === 'GET' && $resource === 'stream') {
         // Check for new notifications
         $latest_notif = (int)db_query_single($db, 'SELECT MAX(id) FROM notifications WHERE user_id=:uid', [':uid' => $uid]) ?: 0;
         if ($latest_notif > $last_notif_id) {
-            $unread = (int)db_query_single($db, 'SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read=0', [':uid' => $uid]);
+            $unread = (int)db_query_single($db, 'SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND `read`=0', [':uid' => $uid]);
             echo "data: " . json_encode(['type' => 'notification', 'unread' => $unread]) . "\n\n";
             $last_notif_id = $latest_notif;
         }
