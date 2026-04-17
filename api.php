@@ -25,13 +25,25 @@ function get_db(): PDO {
     $c = $CONFIG['db'];
     
     if ($c['driver'] === 'mysql') {
-        $dsn = "mysql:host={$c['host']};dbname={$c['dbname']};charset={$c['charset']}";
-        $db = new PDO($dsn, $c['user'], $c['pass'], [
+        $initCommand = defined('Pdo\Mysql::ATTR_INIT_COMMAND') 
+            ? \Pdo\Mysql::ATTR_INIT_COMMAND 
+            : (defined('PDO::MYSQL_ATTR_INIT_COMMAND') ? PDO::MYSQL_ATTR_INIT_COMMAND : 1002);
+
+        $options = [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => true,
-            PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES {$c['charset']}"
-        ]);
+            $initCommand => "SET NAMES {$c['charset']}"
+        ];
+
+        // First connect without dbname to ensure it exists
+        $dsnNoDb = "mysql:host={$c['host']};charset={$c['charset']}";
+        $tmpDb = new PDO($dsnNoDb, $c['user'], $c['pass'], $options);
+        $tmpDb->exec("CREATE DATABASE IF NOT EXISTS `{$c['dbname']}` CHARACTER SET {$c['charset']} COLLATE {$c['charset']}_unicode_ci");
+        $tmpDb = null;
+
+        $dsn = "mysql:host={$c['host']};dbname={$c['dbname']};charset={$c['charset']}";
+        $db = new PDO($dsn, $c['user'], $c['pass'], $options);
     } else {
         $db = new PDO("sqlite:" . $c['sqlite_path'], null, null, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,

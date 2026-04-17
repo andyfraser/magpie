@@ -7,12 +7,12 @@
  */
 return [
     'db' => [
-        'driver'      => 'sqlite', // 'sqlite' or 'mysql'
+        'driver'      => 'mysql', // 'sqlite' or 'mysql'
         'sqlite_path' => __DIR__ . '/magpie.db',
         'host'        => 'localhost',
         'dbname'      => 'magpie',
         'user'        => 'root',
-        'pass'        => '',
+        'pass'        => 'slayer',
         'charset'     => 'utf8mb4',
     ],
 ];
