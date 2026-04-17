@@ -77,7 +77,7 @@ Magpie is designed as a minimalist demo project. While it includes several secur
 
 ## Project Structure
 
-- `index.php` — HTML shell; serves the SPA markup and all modals
+- `index.html` — HTML shell; serves the SPA markup and all modals
 - `api.php` — Entire backend: SQLite init, schema migration, and all API endpoints
 - `js/app.js` — Entire frontend: state management, routing, API calls, DOM rendering
 - `css/style.css` — All application styles
