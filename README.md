@@ -78,7 +78,8 @@ Magpie is designed as a minimalist demo project. While it includes several secur
 ## Project Structure
 
 - `index.html` — HTML shell; serves the SPA markup and all modals
-- `api.php` — Entire backend: SQLite init, schema migration, and all API endpoints
+- `api.php` — API entry point and front controller
+- `src/` — Backend logic: Router, Database, Helpers, and Controllers
 - `js/app.js` — Entire frontend: state management, routing, API calls, DOM rendering
 - `css/style.css` — All application styles
 - `logo.png` — App logo (used as favicon)
